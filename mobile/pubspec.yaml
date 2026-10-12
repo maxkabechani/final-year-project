@@ -4,13 +4,13 @@ publish_to: none
 version: 0.1.0+1
 
 environment:
-  sdk: '>=3.7.0 <4.0.0'
+  sdk: '>=3.10.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
   cryptography: ^2.9.0
-  device_info_plus: ^12.4.0
+  device_info_plus: ^13.3.0
   flutter_blue_plus: ^2.3.14
   flutter_secure_storage: ^11.2.0
   http: ^1.5.0
