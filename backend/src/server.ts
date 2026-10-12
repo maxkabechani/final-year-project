@@ -65,16 +65,23 @@ app.setErrorHandler((error, _request, reply) => {
     void reply.code(400).send({ error: 'Invalid request', details: error.issues });
     return;
   }
-  if ('code' in error && error.code === '23505') {
+  const errorObject = typeof error === 'object' && error !== null
+    ? error as { code?: unknown; statusCode?: unknown; message?: unknown }
+    : undefined;
+  if (errorObject?.code === '23505') {
     void reply.code(409).send({ error: 'That controller or event is already registered' });
     return;
   }
   app.log.error(error);
-  const status = 'statusCode' in error && typeof error.statusCode === 'number'
-    ? error.statusCode
+  const status = typeof errorObject?.statusCode === 'number'
+    ? errorObject.statusCode
     : 500;
   void reply.code(status).send({
-    error: status >= 500 ? 'Internal server error' : error.message,
+    error: status >= 500
+      ? 'Internal server error'
+      : error instanceof Error
+          ? error.message
+          : String(errorObject?.message ?? 'Request failed'),
   });
 });
 

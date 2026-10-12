@@ -21,9 +21,9 @@ The generated debug build allows HTTP for a controller demo on a trusted, isolat
 
 Enter the deployed backend URL and administrator bearer token. Register a controller and install the returned device token and device ID in the firmware configuration. Create a user with their allowed weekdays and local access interval. The app stores the returned credential in Android secure storage.
 
-An administrator can also create a user in the web dashboard, copy the resulting credential JSON, and import it in the app. Hold the controller exit button for five seconds to start physical pairing. The RTC can initialize during this first enrollment from the phone's provisioning time if no trusted backend time sync is configured.
+An administrator can also create a user in the web dashboard, copy the resulting credential JSON, and import it in the app. The RTC can initialize during first enrollment from the phone's provisioning time if no trusted backend time sync is configured.
 
-Hold the controller's exit button for five seconds. It continues to provide the normal inside exit action and then displays a one-time pairing PIN on the LCD. Scan for the CL3 controller, enter the displayed PIN, and enroll the phone. The user can then unlock offline; timetable checks happen on the ESP32 against its DS3231 clock.
+Hold the controller's exit button for five seconds. It still unlocks the door for inside egress, then displays a one-time pairing PIN on the LCD. Scan for the CL3 controller, enter the PIN, and enroll the phone. The user can then unlock offline; timetable checks happen on the ESP32 against its DS3231 clock.
 
 ## Verification
 
