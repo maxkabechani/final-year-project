@@ -76,7 +76,7 @@ class BackendClient {
     final uri = Uri.parse(baseUrl + path);
     final headers = <String, String>{
       'accept': 'application/json',
-      'authorization': 'Bearer ' + adminToken.trim(),
+      'authorization': 'Bearer ${adminToken.trim()}',
     };
     if (body != null) {
       headers['content-type'] = 'application/json';

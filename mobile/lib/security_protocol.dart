@@ -8,14 +8,14 @@ const String bleControlUuid = '9b8e0002-61d0-4f10-9c2a-71f4c05a0001';
 const String bleMessageUuid = '9b8e0003-61d0-4f10-9c2a-71f4c05a0001';
 
 class AccessProtocol {
-  AccessProtocol._({
-    required this.deviceId,
-    required this.challenge,
-    required this.phonePublicKey,
-    required this.controllerPublicKey,
-    required this.mode,
-    required this._sessionKey,
-  });
+  AccessProtocol._(
+    this.deviceId,
+    this.challenge,
+    this.phonePublicKey,
+    this.controllerPublicKey,
+    this.mode,
+    this._sessionKey,
+  );
 
   final String deviceId;
   final List<int> challenge;
@@ -73,12 +73,12 @@ class AccessProtocol {
     );
     final phonePublic = (await helloValue(phoneKeyPair)).sublist(1);
     return AccessProtocol._(
-      deviceId: deviceId,
-      challenge: challenge,
-      phonePublicKey: phonePublic,
-      controllerPublicKey: controllerBytes,
-      mode: mode,
-      _sessionKey: sessionKey,
+      deviceId,
+      challenge,
+      phonePublic,
+      controllerBytes,
+      mode,
+      sessionKey,
     );
   }
 

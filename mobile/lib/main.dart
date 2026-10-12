@@ -1,11 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:cl3_access/backend_client.dart';
 import 'package:cl3_access/security_protocol.dart';
-import 'package:cryptography/cryptography.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -54,7 +52,7 @@ class AccessHomePage extends StatefulWidget {
 
 class _AccessHomePageState extends State<AccessHomePage> {
   static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
-  static const LocalAuthentication _localAuth = LocalAuthentication();
+  static final LocalAuthentication _localAuth = LocalAuthentication();
 
   final _apiUrl = TextEditingController();
   final _adminToken = TextEditingController();
@@ -188,7 +186,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
       );
 
   String _credentialStorageKey(String deviceId) =>
-      'cl3.credential.' + deviceId;
+      'cl3.credential.$deviceId';
 
   Future<Map<String, dynamic>> _loadCredential() async {
     final deviceId = _deviceId.text.trim();
@@ -277,7 +275,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
           if (!await FlutterBluePlus.isSupported) {
             throw const FormatException('Bluetooth LE is not supported here.');
           }
-          final targetName = 'CL3-' + _deviceId.text.trim();
+          final targetName = 'CL3-${_deviceId.text.trim()}';
           final found = Completer<ScanResult>();
           await _scanSubscription?.cancel();
           _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
@@ -304,7 +302,10 @@ class _AccessHomePageState extends State<AccessHomePage> {
           await FlutterBluePlus.stopScan();
           await _device?.disconnect();
           _device = result.device;
-          await _device!.connect(timeout: const Duration(seconds: 15));
+          await _device!.connect(
+            license: License.nonprofit,
+            timeout: const Duration(seconds: 15),
+          );
           try {
             await _device!.requestMtu(247);
           } catch (_) {
@@ -332,7 +333,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
           _messageSubscription = _messages!.onValueReceived.listen(
             _receiveMessage,
           );
-          _setStatus('Connected to ' + targetName);
+          _setStatus('Connected to $targetName');
         },
       );
 
@@ -405,7 +406,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
         allowLongWrite: true,
       );
       final message = await response;
-      return session.decryptResult(message);
+      return await session.decryptResult(message);
     } catch (_) {
       _pendingOpcode = null;
       _pendingMessage = null;
@@ -508,7 +509,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
           final events = await _backend().events(_deviceId.text.trim());
           setState(() {
             _recentEvents = events;
-            _status = 'Loaded ' + events.length.toString() + ' recent events.';
+            _status = 'Loaded ${events.length} recent events.';
           });
         },
       );
@@ -600,7 +601,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
               Text(
                 _credentialUserId == null
                     ? 'No phone credential loaded'
-                    : 'Credential: ' + _credentialUserId!,
+                    : 'Credential: $_credentialUserId',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 10),
@@ -670,14 +671,14 @@ class _AccessHomePageState extends State<AccessHomePage> {
                   Expanded(
                     child: OutlinedButton(
                       onPressed: _busy ? null : () => _chooseTime(start: true),
-                      child: Text('From ' + _formatTime(_startTime)),
+                      child: Text('From ${_formatTime(_startTime)}'),
                     ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: OutlinedButton(
                       onPressed: _busy ? null : () => _chooseTime(start: false),
-                      child: Text('Until ' + _formatTime(_endTime)),
+                      child: Text('Until ${_formatTime(_endTime)}'),
                     ),
                   ),
                 ],
@@ -717,7 +718,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
                     dense: true,
                     leading: const Icon(Icons.receipt_long),
                     title: Text(kind.replaceAll('_', ' ')),
-                    subtitle: Text(user + ' · ' + time),
+                    subtitle: Text('$user · $time'),
                   );
                 }).toList(),
               ),
