@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+firmware/include/config.h
+firmware/.pio/
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/build/
+mobile/pubspec.lock
+backend/node_modules/
+backend/dist/
+backend/coverage/
+**/__pycache__/
+*.pyc
+*.log
+*.apk

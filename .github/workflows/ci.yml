@@ -1,0 +1,75 @@
+name: Project CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Flutter checks and APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Generate Android project files
+        working-directory: mobile
+        run: flutter create --platforms=android --org zm.ac.unza --project-name cl3_access .
+      - name: Add Android permissions
+        working-directory: mobile
+        run: python3 tool/prepare_android.py
+      - name: Resolve Flutter packages
+        working-directory: mobile
+        run: flutter pub get
+      - name: Analyze and test
+        working-directory: mobile
+        run: |
+          dart format lib test
+          flutter analyze --no-pub
+          flutter test --no-pub
+      - name: Build installable debug APK
+        working-directory: mobile
+        run: flutter build apk --debug --no-pub
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CL3-Access-APK
+          path: mobile/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  firmware:
+    name: ESP32 firmware compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install platformio
+      - run: pio run -d firmware
+
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test

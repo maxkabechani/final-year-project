@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CL3 Access Admin</title>
+    <style>
+      :root { color-scheme: light; font: 16px system-ui, sans-serif; background: #f3f5fa; color: #17213a; }
+      body { max-width: 1050px; margin: 0 auto; padding: 24px 16px 48px; }
+      header { margin-bottom: 22px; }
+      h1 { margin: 0 0 6px; font-size: 28px; }
+      p { color: #56617a; }
+      section { background: white; border: 1px solid #e0e5ef; border-radius: 14px; padding: 18px; margin: 14px 0; }
+      h2 { margin: 0 0 14px; font-size: 19px; }
+      label { display: block; font-size: 13px; font-weight: 650; margin: 10px 0 5px; }
+      input, select, button { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid #c8d0df; border-radius: 8px; font: inherit; }
+      button { background: #087f8c; color: white; border: 0; font-weight: 700; cursor: pointer; margin-top: 12px; }
+      button.secondary { background: #e8edf5; color: #17213a; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+      .notice { min-height: 22px; font-weight: 600; color: #087f8c; overflow-wrap: anywhere; }
+      .secret { padding: 12px; background: #fff4d6; border-radius: 8px; overflow-wrap: anywhere; }
+      .scroll { overflow-x: auto; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border-bottom: 1px solid #e7eaf1; text-align: left; padding: 9px 7px; font-size: 14px; }
+      th { color: #56617a; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>CL3 Smart Access</h1>
+      <p>Register controllers, issue timetable-bound credentials, and review door events.</p>
+    </header>
+    <section>
+      <h2>Administrator connection</h2>
+      <div class="grid">
+        <div><label for="api">Backend URL</label><input id="api" value="" placeholder="https://your-host"></div>
+        <div><label for="token">Administrator token</label><input id="token" type="password" autocomplete="off"></div>
+      </div>
+      <button id="load" class="secondary">Load devices and events</button>
+      <div id="status" class="notice" role="status"></div>
+    </section>
+    <section>
+      <h2>Register controller</h2>
+      <div class="grid">
+        <div><label for="deviceId">Controller ID</label><input id="deviceId" value="cl3-door-01"></div>
+        <div><label for="deviceName">Display name</label><input id="deviceName" value="CL3 Laboratory Door"></div>
+      </div>
+      <button id="register">Register controller</button>
+      <p id="deviceToken" class="secret" hidden></p>
+    </section>
+    <section>
+      <h2>Create access user</h2>
+      <div class="grid">
+        <div><label for="userDevice">Controller ID</label><input id="userDevice" value="cl3-door-01"></div>
+        <div><label for="userName">User name</label><input id="userName" placeholder="Student or staff name"></div>
+        <div><label for="days">Allowed days</label><select id="days"><option value="31">Monday to Friday</option><option value="127">Every day</option><option value="1">Monday</option><option value="2">Tuesday</option><option value="4">Wednesday</option><option value="8">Thursday</option><option value="16">Friday</option><option value="32">Saturday</option><option value="64">Sunday</option></select></div>
+        <div><label for="start">Start time</label><input id="start" type="time" value="08:00"></div>
+        <div><label for="end">End time</label><input id="end" type="time" value="18:00"></div>
+      </div>
+      <button id="createUser">Create user credential</button>
+      <p id="credential" class="secret" hidden></p>
+      <button id="copyCredential" class="secondary" hidden>Copy credential JSON for the phone app</button>
+    </section>
+    <section>
+      <h2>Active access users</h2>
+      <div class="grid"><div><label for="usersDevice">Controller ID</label><input id="usersDevice" value="cl3-door-01"></div></div>
+      <button id="loadUsers" class="secondary">Load active users</button>
+      <div class="scroll"><table><thead><tr><th>User</th><th>User ID</th><th>Days mask</th><th>Time range</th><th></th></tr></thead><tbody id="userList"></tbody></table></div>
+    </section>
+    <section>
+      <h2>Registered controllers</h2>
+      <div class="scroll"><table><thead><tr><th>ID</th><th>Name</th><th>Created</th></tr></thead><tbody id="devices"></tbody></table></div>
+    </section>
+    <section>
+      <h2>Recent events</h2>
+      <div class="grid"><div><label for="eventDevice">Controller ID</label><input id="eventDevice" value="cl3-door-01"></div></div>
+      <div class="scroll"><table><thead><tr><th>Time</th><th>Event</th><th>User</th><th>Detail</th></tr></thead><tbody id="events"></tbody></table></div>
+    </section>
+    <script type="module" src="/admin.js"></script>
+  </body>
+</html>
