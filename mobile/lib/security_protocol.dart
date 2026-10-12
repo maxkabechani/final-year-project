@@ -1,11 +1,20 @@
 import 'dart:convert';
+import 'dart:math' show Random;
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:pointycastle/export.dart' as pc;
 
 const String bleServiceUuid = '9b8e0001-61d0-4f10-9c2a-71f4c05a0001';
 const String bleControlUuid = '9b8e0002-61d0-4f10-9c2a-71f4c05a0001';
 const String bleMessageUuid = '9b8e0003-61d0-4f10-9c2a-71f4c05a0001';
+
+class PhoneKeyPair {
+  const PhoneKeyPair._(this._privateKey, this._publicKey);
+
+  final pc.ECPrivateKey _privateKey;
+  final pc.ECPublicKey _publicKey;
+}
 
 class AccessProtocol {
   AccessProtocol._(
@@ -24,22 +33,39 @@ class AccessProtocol {
   final int mode;
   final SecretKey _sessionKey;
 
-  static final Ecdh _ecdh = Ecdh.p256(length: 32);
+  static final pc.ECDomainParameters _p256 =
+      pc.ECDomainParameters('secp256r1');
   static final AesGcm _aes = AesGcm.with128bits();
 
-  static Future<KeyPair> newPhoneKeyPair() => _ecdh.newKeyPair();
-
-  static Future<List<int>> helloValue(KeyPair keyPair) async {
-    final publicKey = await keyPair.extractPublicKey();
-    if (publicKey is! EcPublicKey) {
-      throw StateError('P-256 key pair returned an unexpected public key');
+  static PhoneKeyPair newPhoneKeyPair() {
+    final entropy = Uint8List(32);
+    final systemRandom = Random.secure();
+    for (var i = 0; i < entropy.length; i++) {
+      entropy[i] = systemRandom.nextInt(256);
     }
-    return <int>[0x01, ...publicKey.x, ...publicKey.y];
+    final random = pc.FortunaRandom()..seed(pc.KeyParameter(entropy));
+    final generator = pc.ECKeyGenerator()
+      ..init(
+        pc.ParametersWithRandom(
+          pc.ECKeyGeneratorParameters(_p256),
+          random,
+        ),
+      );
+    final pair = generator.generateKeyPair();
+    return PhoneKeyPair._(pair.privateKey, pair.publicKey);
+  }
+
+  static List<int> helloValue(PhoneKeyPair keyPair) {
+    final encoded = keyPair._publicKey.Q?.getEncoded(false);
+    if (encoded == null || encoded.length != 65 || encoded.first != 0x04) {
+      throw StateError('P-256 public key has an unexpected encoding');
+    }
+    return <int>[0x01, ...encoded.skip(1)];
   }
 
   static Future<AccessProtocol> fromChallenge({
     required String deviceId,
-    required KeyPair phoneKeyPair,
+    required PhoneKeyPair phoneKeyPair,
     required List<int> message,
   }) async {
     if (message.length != 82 || message[0] != 0x02) {
@@ -48,15 +74,20 @@ class AccessProtocol {
     final challenge = message.sublist(1, 17);
     final controllerBytes = message.sublist(17, 81);
     final mode = message[81];
-    final remoteKey = EcPublicKey(
-      x: controllerBytes.sublist(0, 32),
-      y: controllerBytes.sublist(32, 64),
-      type: _ecdh.keyPairType,
+    final remotePoint = _p256.curve.decodePoint(<int>[
+      0x04,
+      ...controllerBytes,
+    ]);
+    if (remotePoint == null || remotePoint.isInfinity) {
+      throw const FormatException('Invalid controller public key');
+    }
+    final agreement = pc.ECDHBasicAgreement()
+      ..init(phoneKeyPair._privateKey);
+    final sharedSecretBytes = _bigIntToFixedBytes(
+      agreement.calculateAgreement(pc.ECPublicKey(remotePoint, _p256)),
+      32,
     );
-    final shared = await _ecdh.sharedSecretKey(
-      keyPair: phoneKeyPair,
-      remotePublicKey: remoteKey,
-    );
+    final shared = SecretKey(sharedSecretBytes);
     final deviceBytes = utf8.encode(deviceId);
     final info = <int>[
       ...ascii.encode('CL3-AES128-V1|'),
@@ -71,7 +102,8 @@ class AccessProtocol {
       nonce: challenge,
       info: info,
     );
-    final phonePublic = (await helloValue(phoneKeyPair)).sublist(1);
+    sharedSecretBytes.fillRange(0, sharedSecretBytes.length, 0);
+    final phonePublic = helloValue(phoneKeyPair).sublist(1);
     return AccessProtocol._(
       deviceId,
       challenge,
@@ -143,6 +175,18 @@ class AccessProtocol {
         ...uuidToBytes(userId),
         operation,
       ];
+}
+
+Uint8List _bigIntToFixedBytes(BigInt value, int length) {
+  if (value.isNegative || value.bitLength > length * 8) {
+    throw StateError('ECDH shared secret does not fit the expected length');
+  }
+  final bytes = Uint8List(length);
+  for (var i = length - 1; i >= 0; i--) {
+    bytes[i] = (value & BigInt.from(0xff)).toInt();
+    value >>= 8;
+  }
+  return bytes;
 }
 
 List<int> uuidToBytes(String value) {

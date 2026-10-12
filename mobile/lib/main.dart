@@ -371,8 +371,8 @@ class _AccessHomePageState extends State<AccessHomePage> {
     if (control == null) {
       throw const FormatException('Connect to the controller first.');
     }
-    final phoneKeyPair = await AccessProtocol.newPhoneKeyPair();
-    final phonePublic = await AccessProtocol.helloValue(phoneKeyPair);
+    final phoneKeyPair = AccessProtocol.newPhoneKeyPair();
+    final phonePublic = AccessProtocol.helloValue(phoneKeyPair);
     final response = _waitForMessage(0x02);
     try {
       await control.write(phonePublic, withoutResponse: false);

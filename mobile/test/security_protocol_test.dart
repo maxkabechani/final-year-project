@@ -1,5 +1,4 @@
 import 'package:cl3_access/security_protocol.dart';
-import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -10,21 +9,36 @@ void main() {
     );
   });
 
-  test('P-256 peers derive the same shared secret', () async {
-    final ecdh = Ecdh.p256(length: 32);
-    final alice = await ecdh.newKeyPair();
-    final bob = await ecdh.newKeyPair();
-    final aliceShared = await ecdh.sharedSecretKey(
-      keyPair: alice,
-      remotePublicKey: await bob.extractPublicKey(),
+  test('P-256 controller challenge derives a phone session', () async {
+    const deviceId = 'cl3-door-01';
+    final phone = AccessProtocol.newPhoneKeyPair();
+    final controller = AccessProtocol.newPhoneKeyPair();
+    final controllerHello = AccessProtocol.helloValue(controller);
+    final nonce = List<int>.generate(16, (index) => index);
+    final challenge = <int>[
+      0x02,
+      ...nonce,
+      ...controllerHello.sublist(1),
+      0x01,
+    ];
+    final session = await AccessProtocol.fromChallenge(
+      deviceId: deviceId,
+      phoneKeyPair: phone,
+      message: challenge,
     );
-    final bobShared = await ecdh.sharedSecretKey(
-      keyPair: bob,
-      remotePublicKey: await alice.extractPublicKey(),
-    );
+
+    expect(controllerHello, hasLength(65));
+    expect(controllerHello.first, 0x01);
+    expect(session.challenge, nonce);
+    expect(session.phonePublicKey, AccessProtocol.helloValue(phone).sublist(1));
+    expect(session.controllerPublicKey, controllerHello.sublist(1));
     expect(
-      await aliceShared.extractBytes(),
-      await bobShared.extractBytes(),
+      await session.proof(
+        userId: '00112233-4455-6677-8899-aabbccddeeff',
+        credential: List<int>.filled(32, 5),
+        operation: 0x01,
+      ),
+      hasLength(32),
     );
   });
 
