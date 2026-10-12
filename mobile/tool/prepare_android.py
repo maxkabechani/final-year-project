@@ -107,7 +107,8 @@ else:
 source = gradle_file.read_text(encoding="utf-8")
 if "androidx.appcompat:appcompat" not in source:
     marker = "dependencies {"
-    if marker not in source:
-        raise SystemExit("Could not locate dependencies block in Android app Gradle file")
-    source = source.replace(marker, marker + "\n" + dependency_line, 1)
+    if marker in source:
+        source = source.replace(marker, marker + "\n" + dependency_line, 1)
+    else:
+        source += "\n\ndependencies {\n" + dependency_line + "\n}\n"
     gradle_file.write_text(source, encoding="utf-8")

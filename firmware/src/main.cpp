@@ -16,11 +16,10 @@
 #include <time.h>
 #include <vector>
 
-#if __has_include("../include/config.h")
-#include "../include/config.h"
-#else
-#include "../include/config.example.h"
+#if __has_include("../include/cl3_local_config.h")
+#include "../include/cl3_local_config.h"
 #endif
+#include "../include/config.example.h"
 
 static const char *kServiceUuid = "9b8e0001-61d0-4f10-9c2a-71f4c05a0001";
 static const char *kControlUuid = "9b8e0002-61d0-4f10-9c2a-71f4c05a0001";

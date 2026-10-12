@@ -20,7 +20,7 @@ Every push and pull request runs the Android build in GitHub Actions. Open the A
 1. Start PostgreSQL and configure backend/.env from backend/.env.example.
 2. Start the backend with npm install and npm run dev from backend.
 3. Open the dashboard at /admin and register a controller.
-4. Copy its device ID and device token into firmware/include/config.h, then flash the ESP32.
+4. Copy its device ID and device token into firmware/include/cl3_local_config.h, then flash the ESP32.
 5. Install the APK and enter the API URL and administrator token. Create a user in the app, or create one in the dashboard and import its credential JSON into the app.
 6. Hold the controller exit button for five seconds, enter the LCD pairing PIN, and enroll the phone.
 7. Tap Unlock. The phone asks for a biometric, authenticates over BLE, and the controller checks the stored timetable. This flow continues to work without Wi-Fi.

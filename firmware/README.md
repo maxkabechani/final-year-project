@@ -5,8 +5,8 @@ This PlatformIO Arduino project targets the ESP32-32S 38-pin board. It implement
 ## Build and flash
 
 1. Install PlatformIO Core or the VS Code PlatformIO extension.
-2. Copy include/config.example.h to include/config.h.
-3. Register the controller with the backend and copy its device ID and one-time device token into config.h.
+2. Copy include/config.example.h to include/cl3_local_config.h.
+3. Register the controller with the backend and copy its device ID and one-time device token into cl3_local_config.h.
 4. Set Wi-Fi, backend URL, and trusted root CA values if server time, timetable sync, and log upload are required.
 5. Connect the ESP32 over USB, then run pio run -d firmware and pio run -d firmware -t upload.
 

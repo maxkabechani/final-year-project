@@ -1,7 +1,7 @@
 .env
 .env.*
 !.env.example
-firmware/include/config.h
+firmware/include/cl3_local_config.h
 firmware/.pio/
 mobile/.dart_tool/
 mobile/.flutter-plugins

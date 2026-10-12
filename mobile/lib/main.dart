@@ -140,7 +140,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
           _deviceId.text = deviceId;
           await Clipboard.setData(ClipboardData(text: token));
           _setStatus(
-            'Controller registered. Device token copied; add it to firmware/include/config.h.',
+            'Controller registered. Device token copied; add it to firmware/include/cl3_local_config.h.',
           );
         },
       );
