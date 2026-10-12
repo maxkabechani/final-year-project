@@ -251,7 +251,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
 
   Future<void> _requestBlePermissions() async {
     if (!Platform.isAndroid) {
-      throw const UnsupportedError('This demonstration build targets Android.');
+      throw UnsupportedError('This demonstration build targets Android.');
     }
     final androidInfo = await DeviceInfoPlugin().androidInfo;
     final requiredPermissions = androidInfo.version.sdkInt >= 31
