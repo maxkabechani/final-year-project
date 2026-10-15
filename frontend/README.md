@@ -1,6 +1,6 @@
-# CL3 Access Web
+# Smart Access Web
 
-TanStack Start administration dashboard for the CL3 smart access project.
+TanStack Start administration dashboard for Smart Access.
 
 ## Stack
 
