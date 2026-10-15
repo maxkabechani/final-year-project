@@ -15,7 +15,18 @@ import type { Device } from '@/lib/api'
 import { useAdminConfig } from '@/lib/config'
 import { useDevices, useRegisterDevice } from '@/lib/queries'
 
-export const Route = createFileRoute('/devices')({ component: DevicesPage })
+export const Route = createFileRoute('/devices')({
+  head: () => ({
+    title: 'Smart Locks | Smart Access',
+    meta: [
+      { name: 'description', content: 'Register and manage smart lock controllers, rooms, locations and device status.' },
+      { property: 'og:title', content: 'Smart Locks | Smart Access' },
+      { property: 'og:description', content: 'Register and manage smart lock controllers, rooms, locations and device status.' },
+      { name: 'twitter:card', content: 'summary' },
+    ],
+  }),
+  component: DevicesPage,
+})
 
 function DevicesPage() {
   const { configured } = useAdminConfig()
