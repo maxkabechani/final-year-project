@@ -114,8 +114,7 @@ export function useGrantAccess() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (input: {
-      personId?: string
-      name?: string
+      personId: string
       deviceId: string
       schedule: AccessSchedule
     }) =>
@@ -123,7 +122,6 @@ export function useGrantAccess() {
         grantId: string
         personId: string
         name: string
-        credentialKeyHex: string
         deviceId: string
         schedule: AccessSchedule
       }>(config, '/api/access-grants', {
