@@ -13,7 +13,18 @@ import type { AccessEvent } from '@/lib/api'
 import { useAdminConfig } from '@/lib/config'
 import { useEvents } from '@/lib/queries'
 
-export const Route = createFileRoute('/events')({ component: EventsPage })
+export const Route = createFileRoute('/events')({
+  head: () => ({
+    title: 'Activity | Smart Access',
+    meta: [
+      { name: 'description', content: 'Review smart lock access events, granted and denied attempts, and controller audit activity.' },
+      { property: 'og:title', content: 'Activity | Smart Access' },
+      { property: 'og:description', content: 'Review smart lock access events, granted and denied attempts, and controller audit activity.' },
+      { name: 'twitter:card', content: 'summary' },
+    ],
+  }),
+  component: EventsPage,
+})
 
 function EventsPage() {
   const { configured } = useAdminConfig()
