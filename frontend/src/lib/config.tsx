@@ -19,7 +19,6 @@ const defaultApiUrl =
   (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/, '') ?? ''
 
 const STORAGE_KEY = 'smart-access-admin-config'
-const LEGACY_STORAGE_KEY = 'cl3-admin-config'
 
 const ConfigContext = createContext<ConfigContextValue | null>(null)
 
@@ -30,9 +29,7 @@ export function ConfigProvider({ children }: PropsWithChildren) {
   })
 
   useEffect(() => {
-    const stored =
-      window.localStorage.getItem(STORAGE_KEY) ??
-      window.localStorage.getItem(LEGACY_STORAGE_KEY)
+    const stored = window.localStorage.getItem(STORAGE_KEY)
     if (!stored) return
 
     try {
@@ -43,7 +40,6 @@ export function ConfigProvider({ children }: PropsWithChildren) {
       })
     } catch {
       window.localStorage.removeItem(STORAGE_KEY)
-      window.localStorage.removeItem(LEGACY_STORAGE_KEY)
     }
   }, [])
 
@@ -54,14 +50,12 @@ export function ConfigProvider({ children }: PropsWithChildren) {
     }
     setConfig(normalized)
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized))
-    window.localStorage.removeItem(LEGACY_STORAGE_KEY)
   }
 
   const clearConfig = () => {
     const next = { apiUrl: defaultApiUrl, adminToken: '' }
     setConfig(next)
     window.localStorage.removeItem(STORAGE_KEY)
-    window.localStorage.removeItem(LEGACY_STORAGE_KEY)
   }
 
   const value = useMemo(
