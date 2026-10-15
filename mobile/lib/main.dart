@@ -359,7 +359,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
         withoutResponse: false,
         allowLongWrite: true,
       );
-      return session.decryptResult(await response);
+      return await session.decryptResult(await response);
     } catch (_) {
       _pendingOpcode = null;
       _pendingMessage = null;
