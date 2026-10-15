@@ -62,7 +62,14 @@ export type AccessEvent = {
 
 export type AdminConfig = {
   apiUrl: string
-  adminToken: string
+}
+
+export type DashboardAdmin = {
+  id: string
+  name: string
+  email: string
+  role: 'owner' | 'admin'
+  createdAt: string
 }
 
 type JsonObject = Record<string, unknown>
@@ -75,9 +82,9 @@ export async function apiRequest<T>(
   const base = config.apiUrl.replace(/\/+$/, '')
   const response = await fetch(base + path, {
     ...options,
+    credentials: 'include',
     headers: {
       accept: 'application/json',
-      authorization: `Bearer ${config.adminToken}`,
       ...(options.body ? { 'content-type': 'application/json' } : {}),
       ...options.headers,
     },
