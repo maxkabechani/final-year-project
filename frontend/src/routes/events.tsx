@@ -60,14 +60,14 @@ function EventsPage() {
   if (!configured) return <div className="p-4 lg:p-6"><Card><CardContent className="py-8 text-sm text-muted-foreground">Configure the API connection before viewing audit events.</CardContent></Card></div>
 
   return (
-    <div className="flex flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
+    <div className="flex min-w-0 max-w-full flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
       <PageHeader
         eyebrow="Audit trail"
         title="Access activity"
         description="Granted, denied and enrollment events streamed from every smart lock."
         action={<div className="flex flex-col gap-2 sm:flex-row sm:items-end"><DevicePicker value={deviceId} onChange={setDeviceId} includeAll /><Button type="button" variant="outline" disabled={events.isFetching} onClick={() => events.refetch()}><RefreshCw className={events.isFetching ? 'animate-spin' : ''} />Refresh</Button></div>}
       />
-      <div className="px-4 lg:px-6">
+      <div className="min-w-0 max-w-full px-4 lg:px-6">
         <Card>
           <CardHeader><CardTitle>Audit events</CardTitle><CardDescription>Latest 200 events for {deviceId ? 'the selected lock' : 'all smart locks'}.</CardDescription></CardHeader>
           <CardContent>
