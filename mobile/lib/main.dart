@@ -464,7 +464,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
             );
           }
           final accepted = await _localAuth.authenticate(
-            localizedReason: 'Confirm access to the CL3 laboratory',
+            localizedReason: 'Confirm your identity to unlock this smart lock',
             biometricOnly: true,
             persistAcrossBackgrounding: true,
           );
@@ -575,7 +575,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
     final connected = _control != null && _messages != null;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('CL3 Smart Access'),
+        title: const Text('Smart Access'),
         backgroundColor: Theme.of(context).colorScheme.surface,
       ),
       body: SafeArea(
