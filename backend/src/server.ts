@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { getMigrations } from 'better-auth/db/migration';
+import { fromNodeHeaders } from 'better-auth/node';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
@@ -10,13 +12,12 @@ import {
   newCredential,
   newDeviceToken,
   newMobileToken,
-  sameSecret,
   tokenHash,
 } from './crypto.js';
+import { auth } from './auth.js';
 import { closeDatabase, initializeDatabase, pool } from './database.js';
 
 const app = Fastify({ logger: true, bodyLimit: 256 * 1024 });
-const adminToken = process.env.ADMIN_TOKEN ?? '';
 const masterKey = process.env.CREDENTIAL_MASTER_KEY ?? '';
 const port = Number(process.env.PORT ?? '8080');
 
@@ -89,9 +90,35 @@ function bearer(request: FastifyRequest): string {
   return value.startsWith('Bearer ') ? value.slice(7).trim() : '';
 }
 
+type DashboardRole = 'owner' | 'admin' | 'user';
+
+async function dashboardSession(request: FastifyRequest) {
+  return auth.api.getSession({
+    headers: fromNodeHeaders(request.headers),
+  });
+}
+
 async function requireAdmin(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-  if (!sameSecret(bearer(request), adminToken)) {
-    await reply.code(401).send({ error: 'Administrator authentication required' });
+  const session = await dashboardSession(request);
+  const role = (session?.user as { role?: DashboardRole } | undefined)?.role;
+  if (!session) {
+    await reply.code(401).send({ error: 'Sign in required' });
+    return;
+  }
+  if (role !== 'owner' && role !== 'admin') {
+    await reply.code(403).send({ error: 'Administrator access required' });
+  }
+}
+
+async function requireOwner(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const session = await dashboardSession(request);
+  const role = (session?.user as { role?: DashboardRole } | undefined)?.role;
+  if (!session) {
+    await reply.code(401).send({ error: 'Sign in required' });
+    return;
+  }
+  if (role !== 'owner') {
+    await reply.code(403).send({ error: 'Only the owner can add administrators' });
   }
 }
 
@@ -200,42 +227,56 @@ await app.register(cors, {
   },
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['authorization', 'content-type', 'accept'],
+  credentials: true,
+  maxAge: 86400,
+});
+
+app.route({
+  method: ['GET', 'POST'],
+  url: '/api/auth/*',
+  async handler(request, reply) {
+    try {
+      const base = process.env.BETTER_AUTH_URL ?? `http://${request.headers.host}`;
+      const url = new URL(request.url, base);
+      const authRequest = new Request(url.toString(), {
+        method: request.method,
+        headers: fromNodeHeaders(request.headers),
+        ...(request.body ? { body: JSON.stringify(request.body) } : {}),
+      });
+      const response = await auth.handler(authRequest);
+      reply.status(response.status);
+      response.headers.forEach((value, key) => reply.header(key, value));
+      return reply.send(response.body ? await response.text() : null);
+    } catch (error) {
+      app.log.error(error, 'Better Auth request failed');
+      return reply.code(500).send({ error: 'Authentication request failed' });
+    }
+  },
 });
 
 await app.register(websocket);
 
-app.get('/ws/admin', { websocket: true }, (rawSocket) => {
+app.get('/ws/admin', { websocket: true }, (rawSocket, request) => {
   const socket = rawSocket as unknown as AdminSocket;
-  let authenticated = false;
-
-  const authTimeout = setTimeout(() => {
-    if (!authenticated) socket.close();
-  }, 5_000);
-
-  socket.on('message', (payload) => {
-    try {
-      const value = JSON.parse(payload.toString()) as { type?: unknown; token?: unknown };
-      if (value.type !== 'auth' || typeof value.token !== 'string') return;
-      if (!sameSecret(value.token, adminToken)) {
-        socket.send(JSON.stringify({ type: 'auth_error' }));
-        socket.close();
-        return;
-      }
-      authenticated = true;
-      clearTimeout(authTimeout);
-      adminSockets.add(socket);
-      socket.send(JSON.stringify({ type: 'ready' }));
-    } catch {
-      socket.close();
-    }
-  });
 
   const cleanup = () => {
-    clearTimeout(authTimeout);
     adminSockets.delete(socket);
   };
   socket.on('close', cleanup);
   socket.on('error', cleanup);
+
+  void (async () => {
+    const session = await dashboardSession(request);
+    const role = (session?.user as { role?: DashboardRole } | undefined)?.role;
+    if (!session || (role !== 'owner' && role !== 'admin')) {
+      socket.send(JSON.stringify({ type: 'auth_error' }));
+      socket.close();
+      return;
+    }
+
+    adminSockets.add(socket);
+    socket.send(JSON.stringify({ type: 'ready' }));
+  })().catch(() => socket.close());
 });
 
 app.get('/', async () => ({
@@ -392,6 +433,40 @@ app.get('/api/mobile/access', async (request, reply) => {
       validUntil: row.validUntil === null ? null : Number(row.validUntil),
     })),
   };
+});
+
+app.get('/api/admins', { preHandler: requireAdmin }, async () => {
+  const result = await pool.query(
+    `SELECT
+       id,
+       name,
+       email,
+       role,
+       "createdAt"
+     FROM "user"
+     WHERE role IN ('owner', 'admin')
+     ORDER BY CASE WHEN role = 'owner' THEN 0 ELSE 1 END, "createdAt" ASC`,
+  );
+  return { admins: result.rows };
+});
+
+app.post('/api/admins', { preHandler: requireOwner }, async (request, reply) => {
+  const body = z.object({
+    name: z.string().trim().min(2).max(120),
+    email: z.string().trim().email().max(254),
+    password: z.string().min(8).max(128),
+  }).parse(request.body);
+
+  const created = await auth.api.createUser({
+    body: {
+      name: body.name,
+      email: body.email.toLowerCase(),
+      password: body.password,
+      role: 'admin',
+    },
+  });
+
+  return reply.code(201).send({ admin: created.user });
 });
 
 app.get('/api/devices', { preHandler: requireAdmin }, async () => {
@@ -873,17 +948,46 @@ app.addHook('onClose', async () => {
   await closeDatabase();
 });
 
-async function start(): Promise<void> {
-  if (adminToken.length < 24) {
-    throw new Error('Set ADMIN_TOKEN to at least 24 characters');
+async function initializeBetterAuth(): Promise<void> {
+  const { runMigrations } = await getMigrations(auth.options);
+  await runMigrations();
+
+  const result = await pool.query<{ count: string }>('SELECT count(*)::text AS count FROM "user"');
+  if (Number(result.rows[0]?.count ?? '0') > 0) return;
+
+  const email = process.env.BETTER_AUTH_OWNER_EMAIL?.trim();
+  const password = process.env.BETTER_AUTH_OWNER_PASSWORD;
+  const name = process.env.BETTER_AUTH_OWNER_NAME?.trim() || 'Owner';
+
+  if (!email || !password) {
+    throw new Error(
+      'Set BETTER_AUTH_OWNER_EMAIL and BETTER_AUTH_OWNER_PASSWORD for the first dashboard owner',
+    );
   }
+
+  await auth.api.createUser({
+    body: {
+      email: email.toLowerCase(),
+      password,
+      name,
+      role: 'owner',
+    },
+  });
+  app.log.info({ email }, 'Created initial Smart Access owner');
+}
+
+async function start(): Promise<void> {
   if (!process.env.DATABASE_URL) {
     throw new Error('Set DATABASE_URL before starting the backend');
   }
   if (!/^[0-9a-f]{64}$/i.test(masterKey)) {
     throw new Error('Set CREDENTIAL_MASTER_KEY to 64 hex characters');
   }
+  if (!process.env.BETTER_AUTH_SECRET || process.env.BETTER_AUTH_SECRET.length < 32) {
+    throw new Error('Set BETTER_AUTH_SECRET to at least 32 characters');
+  }
   await initializeDatabase();
+  await initializeBetterAuth();
   await app.listen({ host: '0.0.0.0', port });
 }
 
