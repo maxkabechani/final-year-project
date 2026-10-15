@@ -1,4 +1,4 @@
-import 'package:cl3_access/main.dart';
+import 'package:smart_access/main.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
