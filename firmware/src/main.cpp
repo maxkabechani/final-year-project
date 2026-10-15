@@ -144,7 +144,7 @@ static void appendDeviceId(std::vector<uint8_t> &out) {
 
 static std::vector<uint8_t> baseAad() {
   std::vector<uint8_t> aad;
-  appendAscii(aad, "CL3-AAD-V1|");
+  appendAscii(aad, "SMART-ACCESS-AAD-V1|");
   appendDeviceId(aad);
   aad.insert(aad.end(), sessionNonce, sessionNonce + sizeof(sessionNonce));
   aad.insert(aad.end(), phonePublicKey, phonePublicKey + sizeof(phonePublicKey));
@@ -155,7 +155,7 @@ static std::vector<uint8_t> baseAad() {
 
 static std::vector<uint8_t> hmacTranscript(const uint8_t userId[16], uint8_t operation) {
   std::vector<uint8_t> transcript;
-  appendAscii(transcript, "CL3-HMAC-V1|");
+  appendAscii(transcript, "SMART-ACCESS-HMAC-V1|");
   appendDeviceId(transcript);
   transcript.insert(transcript.end(), sessionNonce, sessionNonce + sizeof(sessionNonce));
   transcript.insert(transcript.end(), phonePublicKey, phonePublicKey + sizeof(phonePublicKey));
@@ -172,7 +172,7 @@ static bool deriveSessionKey(const uint8_t sharedSecret[32]) {
     return false;
   }
   std::vector<uint8_t> info;
-  appendAscii(info, "CL3-AES128-V1|");
+  appendAscii(info, "SMART-ACCESS-AES128-V1|");
   appendDeviceId(info);
   info.push_back(1);
   uint8_t expanded[32];
@@ -458,7 +458,7 @@ static bool decryptPayload(const uint8_t *value, size_t length,
 
 static void sendEncryptedResult(uint8_t resultCode) {
   std::vector<uint8_t> aad = baseAad();
-  appendAscii(aad, "CL3-RESULT");
+  appendAscii(aad, "SMART-ACCESS-RESULT");
   uint8_t nonce[12];
   uint8_t tag[16];
   esp_fill_random(nonce, sizeof(nonce));
