@@ -16,7 +16,18 @@ import { dayMaskFromDate, daysLabel, grantState, minutesToTime, timeToMinutes, t
 import { useAdminConfig } from '@/lib/config'
 import { useAccessGrants, useDevices, useGrantAccess, usePeople, useRevokeGrant } from '@/lib/queries'
 
-export const Route = createFileRoute('/access')({ component: AccessPage })
+export const Route = createFileRoute('/access')({
+  head: () => ({
+    title: 'Access Control | Smart Access',
+    meta: [
+      { name: 'description', content: 'Grant recurring or one-off access to specific people for specific doors and rooms.' },
+      { property: 'og:title', content: 'Access Control | Smart Access' },
+      { property: 'og:description', content: 'Grant recurring or one-off access to specific people for specific doors and rooms.' },
+      { name: 'twitter:card', content: 'summary' },
+    ],
+  }),
+  component: AccessPage,
+})
 
 const dayOptions = [
   { value: '0', label: 'Mon' }, { value: '1', label: 'Tue' }, { value: '2', label: 'Wed' },
