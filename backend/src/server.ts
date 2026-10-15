@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
-import fastifyStatic from '@fastify/static';
+import cors from '@fastify/cors';
 import { z, ZodError } from 'zod';
 import {
   constantTimeHexEqual,
@@ -18,7 +17,6 @@ const app = Fastify({ logger: true, bodyLimit: 256 * 1024 });
 const adminToken = process.env.ADMIN_TOKEN ?? '';
 const masterKey = process.env.CREDENTIAL_MASTER_KEY ?? '';
 const port = Number(process.env.PORT ?? '8080');
-const publicDirectory = path.join(process.cwd(), 'public');
 
 const deviceIdSchema = z.string().min(3).max(20).regex(/^[A-Za-z0-9._-]+$/);
 const scheduleSchema = z.object({
@@ -85,9 +83,31 @@ app.setErrorHandler((error, _request, reply) => {
   });
 });
 
-await app.register(fastifyStatic, { root: publicDirectory, prefix: '/' });
+const allowedOrigins = new Set(
+  (process.env.CORS_ORIGIN ?? 'http://localhost:3000')
+    .split(',')
+    .map((origin) => origin.trim().replace(/\/$/, ''))
+    .filter(Boolean),
+);
+
+await app.register(cors, {
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.has(origin.replace(/\/$/, ''))) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error('Origin not allowed'), false);
+  },
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['authorization', 'content-type', 'accept'],
+});
+
+app.get('/', async () => ({
+  service: 'CL3 Smart Access API',
+  version: '0.2.0',
+  health: '/health',
+}));
 app.get('/health', async () => ({ ok: true }));
-app.get('/admin', async (_request, reply) => reply.sendFile('admin.html'));
 
 app.get('/api/devices', { preHandler: requireAdmin }, async () => {
   const result = await pool.query(
