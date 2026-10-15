@@ -1,4 +1,4 @@
-name: Project CI
+name: Smart Access CI
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   android:
-    name: Flutter checks and APK
+    name: Android app and APK
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +24,7 @@ jobs:
           cache: true
       - name: Generate Android project files
         working-directory: mobile
-        run: flutter create --platforms=android --org zm.ac.unza --project-name cl3_access .
+        run: flutter create --platforms=android --org dev.maxkabechani --project-name smart_access .
       - name: Add Android permissions
         working-directory: mobile
         run: python3 tool/prepare_android.py
@@ -37,18 +37,21 @@ jobs:
           dart format lib test
           flutter analyze --no-pub --no-fatal-infos
           flutter test --no-pub
-      - name: Build installable debug APK
+      - name: Build Smart Access APK
         working-directory: mobile
-        run: flutter build apk --debug --no-pub --dart-define=API_BASE_URL=https://api-project.maxkabechani.dev
-      - uses: actions/upload-artifact@v4
+        run: |
+          flutter build apk --debug --no-pub --dart-define=API_BASE_URL=https://api-project.maxkabechani.dev
+          cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/Smart-Access.apk
+      - name: Upload Smart Access APK
+        uses: actions/upload-artifact@v4
         with:
-          name: CL3-Access-APK
-          path: mobile/build/app/outputs/flutter-apk/app-debug.apk
+          name: Smart-Access-APK
+          path: mobile/build/app/outputs/flutter-apk/Smart-Access.apk
           if-no-files-found: error
           retention-days: 30
 
   firmware:
-    name: ESP32 firmware compile
+    name: Smart lock firmware compile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,7 +76,7 @@ jobs:
       - run: bun test test/*.test.ts
 
   frontend:
-    name: TanStack frontend checks
+    name: TanStack dashboard checks
     runs-on: ubuntu-latest
     defaults:
       run:
