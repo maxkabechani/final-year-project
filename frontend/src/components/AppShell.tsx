@@ -2,6 +2,7 @@ import { useRouterState } from '@tanstack/react-router'
 import { useEffect, useState, type PropsWithChildren } from 'react'
 import { AppSidebar } from '@/components/AppSidebar'
 import { SiteHeader } from '@/components/SiteHeader'
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { useLiveUpdates } from '@/hooks/use-live-updates'
 
 export function AppShell({ children }: PropsWithChildren) {
@@ -15,21 +16,23 @@ export function AppShell({ children }: PropsWithChildren) {
   }, [pathname])
 
   return (
-    <div className="flex min-h-svh w-full bg-sidebar">
+    <SidebarProvider>
       <AppSidebar
         mobileOpen={mobileOpen}
         collapsed={collapsed}
         liveConnected={liveConnected}
         onMobileClose={() => setMobileOpen(false)}
       />
-      <main className="relative flex min-w-0 flex-1 flex-col bg-background md:m-2 md:ml-0 md:rounded-xl md:border md:shadow-sm">
+      <SidebarInset>
         <SiteHeader
           liveConnected={liveConnected}
           onOpenMobile={() => setMobileOpen(true)}
           onToggleCollapse={() => setCollapsed((value) => !value)}
         />
-        <div className="@container/main flex flex-1 flex-col">{children}</div>
-      </main>
-    </div>
+        <div className="@container/main flex min-w-0 max-w-full flex-1 flex-col overflow-x-clip">
+          {children}
+        </div>
+      </SidebarInset>
+    </SidebarProvider>
   )
 }
