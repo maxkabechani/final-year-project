@@ -39,9 +39,24 @@ export async function initializeDatabase(): Promise<void> {
     `CREATE TABLE IF NOT EXISTS people (
       person_id UUID PRIMARY KEY,
       name TEXT NOT NULL,
+      phone_number TEXT,
       credential_ciphertext TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
+    `ALTER TABLE people ADD COLUMN IF NOT EXISTS phone_number TEXT`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS people_phone_number_unique
+      ON people(phone_number) WHERE phone_number IS NOT NULL`,
+    `CREATE TABLE IF NOT EXISTS mobile_sessions (
+      session_id UUID PRIMARY KEY,
+      person_id UUID NOT NULL REFERENCES people(person_id) ON DELETE CASCADE,
+      installation_id UUID NOT NULL UNIQUE,
+      device_label TEXT NOT NULL DEFAULT '',
+      token_hash TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS mobile_sessions_person_idx
+      ON mobile_sessions(person_id)`,
     `CREATE TABLE IF NOT EXISTS access_grants (
       grant_id UUID PRIMARY KEY,
       person_id UUID NOT NULL REFERENCES people(person_id) ON DELETE CASCADE,
