@@ -85,6 +85,7 @@ bool lockoutActive = false;
 uint32_t lockoutExpiresAt = 0;
 uint32_t unlockUntil = 0;
 uint32_t lastSyncAt = 0;
+bool serverTimeSyncedThisBoot = false;
 
 static int secureRandom(void *, unsigned char *output, size_t length) {
   esp_fill_random(output, length);
@@ -776,6 +777,7 @@ static void syncBackend() {
   const bool timeSynced = syncClock();
   const bool usersSynced = syncUsers();
   const bool eventsSynced = syncEvents();
+  if (timeSynced) serverTimeSyncedThisBoot = true;
   if (timeSynced || usersSynced || eventsSynced) {
     Serial.printf("Backend sync: time=%d users=%d events=%d\n",
                   timeSynced, usersSynced, eventsSynced);
@@ -860,10 +862,12 @@ void loop() {
     lockoutActive = false;
     pairingFailures = 0;
   }
-  if (WiFi.status() == WL_CONNECTED &&
-      static_cast<uint32_t>(millis() - lastSyncAt) >= 60000) {
-    lastSyncAt = millis();
-    syncBackend();
+  if (WiFi.status() == WL_CONNECTED) {
+    const uint32_t syncIntervalMs = serverTimeSyncedThisBoot ? 60000U : 5000U;
+    if (static_cast<uint32_t>(millis() - lastSyncAt) >= syncIntervalMs) {
+      lastSyncAt = millis();
+      syncBackend();
+    }
   }
   delay(8);
 }
