@@ -1,5 +1,5 @@
-name: cl3_access
-description: Offline-first BLE access app for the UNZA CL3 smart door project.
+name: smart_access
+description: Offline-first BLE app for managing and unlocking Smart Access controllers.
 publish_to: none
 version: 0.1.0+1
 
