@@ -306,6 +306,31 @@ class _AccessHomePageState extends State<AccessHomePage> {
     }
   }
 
+  Future<void> _ensureBluetoothOn() async {
+    var state = await FlutterBluePlus.adapterState.first;
+    if (state == BluetoothAdapterState.on) return;
+
+    if (!Platform.isAndroid) {
+      throw const FormatException('Turn on Bluetooth, then try again.');
+    }
+
+    try {
+      await FlutterBluePlus.turnOn();
+      state = await FlutterBluePlus.adapterState
+          .where((value) => value == BluetoothAdapterState.on)
+          .first
+          .timeout(const Duration(seconds: 15));
+    } on TimeoutException {
+      throw const FormatException('Turn on Bluetooth, then try again.');
+    } on PlatformException {
+      throw const FormatException('Turn on Bluetooth, then try again.');
+    }
+
+    if (state != BluetoothAdapterState.on) {
+      throw const FormatException('Turn on Bluetooth, then try again.');
+    }
+  }
+
   Future<void> _scan() async {
     if (_scanning || _busyDoorId != null || _mobileToken == null) return;
 
@@ -317,6 +342,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
         );
       }
 
+      await _ensureBluetoothOn();
       await FlutterBluePlus.stopScan();
       await _scanSubscription?.cancel();
 
