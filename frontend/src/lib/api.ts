@@ -1,15 +1,44 @@
 export type Device = {
   deviceId: string
   name: string
+  location: string
   createdAt: string
+  lastSeenAt: string | null
+  online: boolean
 }
 
+export type Person = {
+  personId: string
+  name: string
+  createdAt: string
+  activeLocks: number
+}
+
+export type AccessType = 'recurring' | 'one_off'
+
 export type AccessSchedule = {
+  accessType: AccessType
   daysMask: number
   startMinute: number
   endMinute: number
   validFrom: number
   validUntil: number | null
+}
+
+export type AccessGrant = {
+  grantId: string
+  personId: string
+  personName: string
+  deviceId: string
+  deviceName: string
+  location: string
+  accessType: AccessType
+  daysMask: number
+  startMinute: number
+  endMinute: number
+  validFrom: number
+  validUntil: number | null
+  createdAt: string
 }
 
 export type AccessUser = {
@@ -20,9 +49,13 @@ export type AccessUser = {
 
 export type AccessEvent = {
   eventId: string
+  deviceId?: string
+  deviceName?: string
+  location?: string
   occurredAt: string
   type: string
   userId: string | null
+  userName?: string | null
   detail: string
 }
 
@@ -75,4 +108,17 @@ export const daysLabel = (mask: number): string => {
   if (mask === 31) return 'Mon–Fri'
   const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
   return labels.filter((_, index) => Boolean(mask & (1 << index))).join(', ')
+}
+
+export const dayMaskFromDate = (value: Date): number => {
+  const jsDay = value.getDay()
+  const mondayFirst = jsDay === 0 ? 6 : jsDay - 1
+  return 1 << mondayFirst
+}
+
+export const grantState = (grant: AccessGrant): 'active' | 'expired' => {
+  if (grant.validUntil !== null && grant.validUntil <= Math.floor(Date.now() / 1000)) {
+    return 'expired'
+  }
+  return 'active'
 }
