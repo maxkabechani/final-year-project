@@ -31,7 +31,7 @@ export function AccessActivityChart({ events }: { events: AccessEvent[] }) {
   }, [days, events])
 
   return (
-    <Card className="@container/card">
+    <Card className="@container/card min-w-0 max-w-full">
       <CardHeader>
         <CardTitle>Access activity</CardTitle>
         <CardDescription>Granted and denied BLE unlock decisions from the selected lock scope.</CardDescription>
