@@ -1,47 +1,42 @@
-# Flutter mobile app
+# Smart Access Android app
 
-The Android app uses FlutterBluePlus for BLE GATT, local_auth for the on-device biometric prompt, cryptography for P-256 ECDH/HKDF/HMAC/AES-GCM, and flutter_secure_storage for the user's credential. The biometric stays on the phone; no fingerprint or face data is sent to the controller or API.
+The Flutter Android app handles BLE discovery, secure credential storage, biometric confirmation and offline smart-lock unlock.
 
-## Generate Android files and run
+## Production API
 
-Install the stable Flutter SDK and Java 17. From this directory run:
-
-1. flutter create --platforms=android --org zm.ac.unza --project-name cl3_access .
-2. python3 tool/prepare_android.py
-3. flutter pub get
-4. flutter run
-
-The project intentionally keeps generated Gradle wrapper and Android template files out of the source tree. GitHub Actions creates the Android platform files before building the APK.
-
-The Android preparation script also changes MainActivity to FlutterFragmentActivity, which is required by the biometric plugin.
-
-The generated debug build allows HTTP for a controller demo on a trusted, isolated lab network. Admin tokens and new credentials are exposed to that network when HTTP is used. Use an HTTPS backend for any shared or public network, and set the ESP32 root CA before enabling backend synchronization.
-
-## First controller setup
-
-Enter the deployed backend URL and administrator bearer token. Register a controller and install the returned device token and device ID in the firmware configuration. Create a user with their allowed weekdays and local access interval. The app stores the returned credential in Android secure storage.
-
-An administrator can also create a user in the web dashboard, copy the resulting credential JSON, and import it in the app. The RTC can initialize during first enrollment from the phone's provisioning time if no trusted backend time sync is configured.
-
-Hold the controller's exit button for five seconds. It still unlocks the door for inside egress, then displays a one-time pairing PIN on the LCD. Scan for the CL3 controller, enter the PIN, and enroll the phone. The user can then unlock offline; timetable checks happen on the ESP32 against its DS3231 clock.
-
-## Verification
-
-flutter analyze and flutter test are run in GitHub Actions. BLE and biometric operation still requires a physical Android phone and the ESP32 controller; the CI build cannot verify hardware behavior.
-
-
-## Backend API
-
-The Android app now defaults to:
+The app is built with:
 
 `https://api-project.maxkabechani.dev`
 
-The value is compiled into the APK through `API_BASE_URL`:
+GitHub Actions supplies it through:
 
 ```bash
-flutter build apk --debug --dart-define=API_BASE_URL=https://api-project.maxkabechani.dev
+--dart-define=API_BASE_URL=https://api-project.maxkabechani.dev
 ```
 
-The source also contains this URL as the fallback value, so local debug builds use the deployed API even when the define is omitted.
+The source contains the same URL as its fallback, so local builds use the deployed API automatically.
 
-The API URL is no longer typed manually in the app. Administrator-only API actions still require the administrator bearer token. Imported phone credentials and offline BLE unlock do not depend on the admin token.
+## Build locally
+
+```bash
+flutter create --platforms=android --org dev.maxkabechani --project-name smart_access .
+python3 tool/prepare_android.py
+flutter pub get
+flutter run --dart-define=API_BASE_URL=https://api-project.maxkabechani.dev
+```
+
+## BLE flow
+
+The app scans for controllers named:
+
+`LOCK-<device-id>`
+
+For the default demonstration controller that is:
+
+`LOCK-front-door-01`
+
+The phone stores credentials in Android secure storage. Biometric data never leaves the phone.
+
+For the simplest user flow, create the person/access grant from the web dashboard, copy the generated credential JSON into the Android app, connect to the matching smart lock, enroll using the pairing PIN, then use **Biometric unlock**.
+
+Administrator-only mobile functions still require the administrator token. Normal imported-credential BLE unlock does not.
