@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:smart_access/mobile_api.dart';
 import 'package:smart_access/security_protocol.dart';
 
 void main() {
@@ -49,6 +51,11 @@ class SmartAccessApp extends StatelessWidget {
             side: BorderSide(color: Color(0xffe8e8e8)),
           ),
         ),
+        inputDecorationTheme: const InputDecorationTheme(
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(14)),
+          ),
+        ),
       ),
       home: const AccessHomePage(),
     );
@@ -66,13 +73,13 @@ class NearbyDoor {
   final BluetoothDevice device;
   final int rssi;
 
-  String get title {
+  String fallbackTitle() {
     final words = deviceId
         .split(RegExp(r'[-_.]+'))
         .where((part) => part.isNotEmpty)
         .map((part) {
           if (part.length <= 2 && int.tryParse(part) != null) return part;
-          return part[0].toUpperCase() + part.substring(1);
+          return '${part[0].toUpperCase()}${part.substring(1)}';
         })
         .toList();
     return words.join(' ');
@@ -90,8 +97,12 @@ class _AccessHomePageState extends State<AccessHomePage> {
   static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
   static final LocalAuthentication _localAuth = LocalAuthentication();
 
+  static const _tokenKey = 'smart-access.mobile-token';
+  static const _installationKey = 'smart-access.installation-id';
+  static const _accessCacheKey = 'smart-access.access-cache';
+
+  final MobileApi _api = MobileApi();
   final Map<String, NearbyDoor> _doors = <String, NearbyDoor>{};
-  final Map<String, bool> _hasAccess = <String, bool>{};
 
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   StreamSubscription<List<int>>? _messageSubscription;
@@ -99,52 +110,177 @@ class _AccessHomePageState extends State<AccessHomePage> {
   BluetoothCharacteristic? _messages;
   Completer<List<int>>? _pendingMessage;
   int? _pendingOpcode;
+  Timer? _accessTimer;
+  Timer? _recentSuccessTimer;
 
+  bool _initializing = true;
+  bool _registering = false;
   bool _scanning = false;
+  bool _syncing = false;
+  String? _mobileToken;
+  String? _installationId;
+  MobileAccessSnapshot? _access;
   String? _busyDoorId;
   String? _recentlyUnlockedDoorId;
-  Timer? _recentSuccessTimer;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scan());
+    unawaited(_initialize());
   }
 
   @override
   void dispose() {
     _scanSubscription?.cancel();
     _messageSubscription?.cancel();
+    _accessTimer?.cancel();
     _recentSuccessTimer?.cancel();
     FlutterBluePlus.stopScan();
+    _api.close();
     super.dispose();
   }
 
-  String _credentialStorageKey(String deviceId) =>
-      'smart-access.credential.' + deviceId;
+  Future<void> _initialize() async {
+    var installationId = await _secureStorage.read(key: _installationKey);
+    if (installationId == null || installationId.isEmpty) {
+      installationId = _uuidV4();
+      await _secureStorage.write(
+        key: _installationKey,
+        value: installationId,
+      );
+    }
 
-  Future<Map<String, dynamic>?> _loadCredential(String deviceId) async {
-    final raw = await _secureStorage.read(key: _credentialStorageKey(deviceId));
-    if (raw == null) return null;
-    final decoded = jsonDecode(raw);
-    return decoded is Map<String, dynamic> ? decoded : null;
-  }
+    final token = await _secureStorage.read(key: _tokenKey);
+    final cached = await _secureStorage.read(key: _accessCacheKey);
 
-  Future<void> _refreshAccessState() async {
-    final entries = await Future.wait(
-      _doors.keys.map((deviceId) async {
-        final raw = await _secureStorage.read(
-          key: _credentialStorageKey(deviceId),
-        );
-        return MapEntry(deviceId, raw != null);
-      }),
-    );
+    MobileAccessSnapshot? snapshot;
+    if (cached != null) {
+      try {
+        final decoded = jsonDecode(cached);
+        if (decoded is Map<String, dynamic>) {
+          snapshot = MobileAccessSnapshot.fromJson(decoded);
+        }
+      } catch (_) {
+        await _secureStorage.delete(key: _accessCacheKey);
+      }
+    }
+
     if (!mounted) return;
     setState(() {
-      for (final entry in entries) {
-        _hasAccess[entry.key] = entry.value;
-      }
+      _installationId = installationId;
+      _mobileToken = token;
+      _access = snapshot;
+      _initializing = false;
     });
+
+    if (token != null && token.isNotEmpty) {
+      await _syncAccess(silent: true);
+      _startAccessRefresh();
+      await _scan();
+    }
+  }
+
+  String _uuidV4() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final hex = bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
+  }
+
+  Future<String> _deviceLabel() async {
+    try {
+      final info = await DeviceInfoPlugin().androidInfo;
+      return '${info.manufacturer} ${info.model}'.trim();
+    } catch (_) {
+      return 'Android phone';
+    }
+  }
+
+  Future<void> _registerPhone({
+    required String fullName,
+    required String phoneNumber,
+  }) async {
+    if (_registering) return;
+    final installationId = _installationId;
+    if (installationId == null) return;
+
+    setState(() => _registering = true);
+    try {
+      final registration = await _api.register(
+        fullName: fullName.trim(),
+        phoneNumber: phoneNumber.trim(),
+        installationId: installationId,
+        deviceLabel: await _deviceLabel(),
+      );
+
+      await _secureStorage.write(
+        key: _tokenKey,
+        value: registration.mobileToken,
+      );
+
+      if (!mounted) return;
+      setState(() => _mobileToken = registration.mobileToken);
+
+      await _syncAccess();
+      _startAccessRefresh();
+      await _scan();
+    } catch (error) {
+      _showMessage(
+        error.toString().replaceFirst('FormatException: ', ''),
+        error: true,
+      );
+    } finally {
+      if (mounted) setState(() => _registering = false);
+    }
+  }
+
+  void _startAccessRefresh() {
+    _accessTimer?.cancel();
+    _accessTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => unawaited(_syncAccess(silent: true)),
+    );
+  }
+
+  Future<void> _syncAccess({bool silent = false}) async {
+    final token = _mobileToken;
+    if (token == null || token.isEmpty || _syncing) return;
+
+    if (mounted) setState(() => _syncing = true);
+    try {
+      final snapshot = await _api.fetchAccess(token);
+      await _secureStorage.write(
+        key: _accessCacheKey,
+        value: jsonEncode(snapshot.toJson()),
+      );
+      if (!mounted) return;
+      setState(() => _access = snapshot);
+    } on MobileApiException catch (error) {
+      if (error.statusCode == 401) {
+        await _secureStorage.delete(key: _tokenKey);
+        await _secureStorage.delete(key: _accessCacheKey);
+        _accessTimer?.cancel();
+        if (!mounted) return;
+        setState(() {
+          _mobileToken = null;
+          _access = null;
+        });
+        _showMessage('This phone needs to be registered again.', error: true);
+      } else if (!silent) {
+        _showMessage(error.message, error: true);
+      }
+    } catch (_) {
+      if (!silent) {
+        _showMessage(
+          'Could not refresh access. Cached access is still available.',
+          error: true,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _syncing = false);
+    }
   }
 
   Future<void> _requestBlePermissions() async {
@@ -171,12 +307,14 @@ class _AccessHomePageState extends State<AccessHomePage> {
   }
 
   Future<void> _scan() async {
-    if (_scanning || _busyDoorId != null) return;
+    if (_scanning || _busyDoorId != null || _mobileToken == null) return;
 
     try {
       await _requestBlePermissions();
       if (!await FlutterBluePlus.isSupported) {
-        throw const FormatException('Bluetooth LE is not supported on this phone.');
+        throw const FormatException(
+          'Bluetooth LE is not supported on this phone.',
+        );
       }
 
       await FlutterBluePlus.stopScan();
@@ -195,7 +333,6 @@ class _AccessHomePageState extends State<AccessHomePage> {
           final advertised = result.advertisementData.advName.isNotEmpty
               ? result.advertisementData.advName
               : result.device.platformName;
-
           if (!advertised.startsWith('LOCK-')) continue;
 
           final deviceId = advertised.substring(5);
@@ -208,11 +345,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
           );
           changed = true;
         }
-
-        if (changed && mounted) {
-          setState(() {});
-          unawaited(_refreshAccessState());
-        }
+        if (changed && mounted) setState(() {});
       });
 
       await FlutterBluePlus.startScan(
@@ -230,6 +363,11 @@ class _AccessHomePageState extends State<AccessHomePage> {
     } finally {
       if (mounted) setState(() => _scanning = false);
     }
+  }
+
+  Future<void> _refreshEverything() async {
+    await _syncAccess(silent: true);
+    await _scan();
   }
 
   Future<void> _connect(NearbyDoor door) async {
@@ -253,11 +391,15 @@ class _AccessHomePageState extends State<AccessHomePage> {
 
     _control = service.characteristics.firstWhere(
       (item) => item.characteristicUuid == Guid(bleControlUuid),
-      orElse: () => throw const FormatException('Door control is unavailable.'),
+      orElse: () => throw const FormatException(
+        'Door control is unavailable.',
+      ),
     );
     _messages = service.characteristics.firstWhere(
       (item) => item.characteristicUuid == Guid(bleMessageUuid),
-      orElse: () => throw const FormatException('Door response channel is unavailable.'),
+      orElse: () => throw const FormatException(
+        'Door response channel is unavailable.',
+      ),
     );
 
     await _messages!.setNotifyValue(true);
@@ -370,9 +512,14 @@ class _AccessHomePageState extends State<AccessHomePage> {
   Future<void> _unlock(NearbyDoor door) async {
     if (_busyDoorId != null) return;
 
-    final credential = await _loadCredential(door.deviceId);
-    if (credential == null) {
-      _showMessage('You do not have access to ' + door.title + '.', error: true);
+    final access = _access;
+    final grant = access?.grantFor(door.deviceId);
+    if (access == null || grant == null) {
+      _showMessage('You do not have access to this door.', error: true);
+      return;
+    }
+    if (!grant.allowsAt(DateTime.now())) {
+      _showMessage('Your access is not active at this time.', error: true);
       return;
     }
 
@@ -387,7 +534,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
       }
 
       final accepted = await _localAuth.authenticate(
-        localizedReason: 'Unlock ' + door.title,
+        localizedReason: 'Unlock ${grant.deviceName}',
         biometricOnly: true,
         persistAcrossBackgrounding: true,
       );
@@ -396,22 +543,22 @@ class _AccessHomePageState extends State<AccessHomePage> {
       await _connect(door);
 
       final session = await _beginSession(door.deviceId);
-      final userId = credential['userId']?.toString() ?? '';
-      final keyHex = credential['credentialKeyHex']?.toString() ?? '';
-      uuidToBytes(userId);
-
-      if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(keyHex)) {
-        throw const FormatException('Your access on this phone is invalid.');
+      uuidToBytes(access.person.personId);
+      if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(access.credentialKeyHex)) {
+        throw const FormatException('Your phone credential is invalid.');
       }
 
       final proof = await session.proof(
-        userId: userId,
-        credential: hexToBytes(keyHex),
+        userId: access.person.personId,
+        credential: hexToBytes(access.credentialKeyHex),
         operation: 0x01,
       );
       final result = await _sendEncrypted(
         session,
-        unlockPayload(userId: userId, proof: proof),
+        unlockPayload(
+          userId: access.person.personId,
+          proof: proof,
+        ),
       );
 
       if (result.isEmpty) {
@@ -422,18 +569,22 @@ class _AccessHomePageState extends State<AccessHomePage> {
         case 0x10:
           HapticFeedback.mediumImpact();
           _recentSuccessTimer?.cancel();
-          setState(() => _recentlyUnlockedDoorId = door.deviceId);
+          if (mounted) {
+            setState(() => _recentlyUnlockedDoorId = door.deviceId);
+          }
           _recentSuccessTimer = Timer(const Duration(seconds: 5), () {
             if (mounted) setState(() => _recentlyUnlockedDoorId = null);
           });
-          _showMessage(door.title + ' unlocked.', success: true);
+          _showMessage('${grant.deviceName} unlocked.', success: true);
           break;
         case 0x11:
           throw const FormatException('You are not authorized for this door.');
         case 0x12:
           throw const FormatException('Your access is not valid at this time.');
         case 0x16:
-          throw const FormatException('This door is waiting for its clock to sync.');
+          throw const FormatException(
+            'This door is waiting for its clock to sync.',
+          );
         default:
           throw const FormatException('Access was denied.');
       }
@@ -444,172 +595,6 @@ class _AccessHomePageState extends State<AccessHomePage> {
       );
     } finally {
       await _disconnect(door.device);
-      if (mounted) setState(() => _busyDoorId = null);
-      unawaited(_scan());
-    }
-  }
-
-  Future<void> _showSetupDialog() async {
-    final codeController = TextEditingController();
-    final pinController = TextEditingController();
-
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.fromLTRB(
-            20,
-            4,
-            20,
-            MediaQuery.viewInsetsOf(context).bottom + 24,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Text(
-                'Set up access',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'This is only needed once when an administrator gives this phone access.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Colors.black54,
-                    ),
-              ),
-              const SizedBox(height: 18),
-              TextField(
-                controller: codeController,
-                minLines: 3,
-                maxLines: 6,
-                autocorrect: false,
-                decoration: const InputDecoration(
-                  labelText: 'Setup code',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: pinController,
-                keyboardType: TextInputType.number,
-                obscureText: true,
-                maxLength: 6,
-                decoration: const InputDecoration(
-                  labelText: 'Pairing PIN',
-                  border: OutlineInputBorder(),
-                  counterText: '',
-                ),
-              ),
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed: () async {
-                  Navigator.of(context).pop();
-                  await _provision(
-                    codeController.text.trim(),
-                    pinController.text.trim(),
-                  );
-                },
-                child: const Text('Add access to this phone'),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-
-    codeController.dispose();
-    pinController.dispose();
-  }
-
-  Future<void> _provision(String rawCode, String pin) async {
-    if (_busyDoorId != null) return;
-
-    try {
-      final decoded = jsonDecode(rawCode);
-      if (decoded is! Map<String, dynamic>) {
-        throw const FormatException('The setup code is invalid.');
-      }
-
-      final deviceId = decoded['deviceId']?.toString() ?? '';
-      final userId = decoded['userId']?.toString() ?? '';
-      final keyHex = decoded['credentialKeyHex']?.toString() ?? '';
-      final schedule = decoded['schedule'];
-
-      if (deviceId.isEmpty ||
-          schedule is! Map<String, dynamic> ||
-          !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(keyHex) ||
-          !RegExp(r'^[0-9]{6}$').hasMatch(pin)) {
-        throw const FormatException('The setup details are incomplete.');
-      }
-      uuidToBytes(userId);
-
-      final door = _doors[deviceId];
-      if (door == null) {
-        throw FormatException(
-          'Bring the phone close to LOCK-' + deviceId + ', then refresh and try again.',
-        );
-      }
-
-      final credential = <String, Object?>{
-        'deviceId': deviceId,
-        'userId': userId,
-        'credentialKeyHex': keyHex,
-        'schedule': schedule,
-      };
-
-      await _secureStorage.write(
-        key: _credentialStorageKey(deviceId),
-        value: jsonEncode(credential),
-      );
-      _hasAccess[deviceId] = true;
-
-      setState(() => _busyDoorId = deviceId);
-
-      await _connect(door);
-      final session = await _beginSession(deviceId);
-      if (session.mode != 1) {
-        throw const FormatException(
-          'Restart the smart lock, then set up access within two minutes.',
-        );
-      }
-
-      final result = await _sendEncrypted(
-        session,
-        enrollmentPayload(
-          userId: userId,
-          credential: hexToBytes(keyHex),
-          daysMask: (schedule['daysMask'] as num).toInt(),
-          startMinute: (schedule['startMinute'] as num).toInt(),
-          endMinute: (schedule['endMinute'] as num).toInt(),
-          validFrom: (schedule['validFrom'] as num).toInt(),
-          validUntil: schedule['validUntil'] == null
-              ? 0
-              : (schedule['validUntil'] as num).toInt(),
-          pairingPin: pin,
-        ),
-      );
-
-      if (result.isEmpty || result[0] != 0x13) {
-        throw const FormatException('The smart lock rejected setup.');
-      }
-
-      HapticFeedback.mediumImpact();
-      _showMessage(
-        'Access added. You can now unlock ' + door.title + '.',
-        success: true,
-      );
-    } catch (error) {
-      _showMessage(
-        error.toString().replaceFirst('FormatException: ', ''),
-        error: true,
-      );
-    } finally {
-      final doorId = _busyDoorId;
-      final door = doorId == null ? null : _doors[doorId];
-      if (door != null) await _disconnect(door.device);
       if (mounted) setState(() => _busyDoorId = null);
       unawaited(_scan());
     }
@@ -646,21 +631,41 @@ class _AccessHomePageState extends State<AccessHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_initializing) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_mobileToken == null) {
+      return RegistrationPage(
+        registering: _registering,
+        onRegister: _registerPhone,
+      );
+    }
+
     final doors = _doors.values.toList()
       ..sort((a, b) => b.rssi.compareTo(a.rssi));
 
     return Scaffold(
       appBar: AppBar(
-        title: GestureDetector(
-          onLongPress: _showSetupDialog,
-          child: const Text(
-            'Smart Access',
-            style: TextStyle(fontWeight: FontWeight.w700),
-          ),
+        title: const Text(
+          'Smart Access',
+          style: TextStyle(fontWeight: FontWeight.w700),
         ),
         actions: <Widget>[
+          if (_syncing)
+            const Padding(
+              padding: EdgeInsets.only(right: 4),
+              child: SizedBox.square(
+                dimension: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
           IconButton(
-            onPressed: _scanning || _busyDoorId != null ? null : _scan,
+            onPressed: _scanning || _busyDoorId != null
+                ? null
+                : _refreshEverything,
             tooltip: 'Refresh nearby doors',
             icon: _scanning
                 ? const SizedBox.square(
@@ -673,7 +678,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: _scan,
+        onRefresh: _refreshEverything,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
@@ -689,18 +694,35 @@ class _AccessHomePageState extends State<AccessHomePage> {
             const SizedBox(height: 6),
             Text(
               _scanning
-                  ? 'Looking for smart locks around you…'
+                  ? 'Looking for Smart Access locks around you…'
                   : doors.isEmpty
-                      ? 'No smart locks are nearby.'
-                      : doors.length.toString() +
-                          ' smart lock' +
-                          (doors.length == 1 ? '' : 's') +
-                          ' nearby',
+                      ? 'No Smart Access locks are nearby.'
+                      : '${doors.length} smart lock${doors.length == 1 ? '' : 's'} nearby',
               style: const TextStyle(
                 fontSize: 14,
                 color: Colors.black54,
               ),
             ),
+            if ((_access?.grants.isEmpty ?? true)) ...<Widget>[
+              const SizedBox(height: 16),
+              const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Row(
+                    children: <Widget>[
+                      Icon(Icons.info_outline_rounded),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Your phone is registered. An administrator has not assigned any doors yet.',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 20),
             if (doors.isEmpty)
               Card(
@@ -736,16 +758,29 @@ class _AccessHomePageState extends State<AccessHomePage> {
               )
             else
               ...doors.map((door) {
-                final hasAccess = _hasAccess[door.deviceId] ?? false;
+                final grant = _access?.grantFor(door.deviceId);
+                final allowedNow = grant?.allowsAt(DateTime.now()) ?? false;
                 final busy = _busyDoorId == door.deviceId;
                 final justUnlocked = _recentlyUnlockedDoorId == door.deviceId;
+                final title = grant?.deviceName.isNotEmpty == true
+                    ? grant!.deviceName
+                    : door.fallbackTitle();
+
+                String status;
+                if (grant == null) {
+                  status = 'No access';
+                } else if (!allowedNow) {
+                  status = 'Outside allowed time';
+                } else {
+                  status = 'Ready to unlock';
+                }
 
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: Card(
                     child: InkWell(
                       borderRadius: BorderRadius.circular(20),
-                      onTap: busy ? null : () => _unlock(door),
+                      onTap: busy || !allowedNow ? null : () => _unlock(door),
                       child: Padding(
                         padding: const EdgeInsets.all(18),
                         child: Row(
@@ -774,13 +809,23 @@ class _AccessHomePageState extends State<AccessHomePage> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: <Widget>[
                                   Text(
-                                    door.title,
+                                    title,
                                     style: const TextStyle(
                                       fontSize: 16,
                                       fontWeight: FontWeight.w700,
                                     ),
                                   ),
-                                  const SizedBox(height: 3),
+                                  if (grant?.location.isNotEmpty == true) ...<Widget>[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      grant!.location,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.black45,
+                                      ),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 5),
                                   Row(
                                     children: <Widget>[
                                       Icon(
@@ -790,15 +835,13 @@ class _AccessHomePageState extends State<AccessHomePage> {
                                       ),
                                       const SizedBox(width: 5),
                                       Text(
-                                        hasAccess
-                                            ? 'Ready to unlock'
-                                            : 'No access assigned',
+                                        status,
                                         style: TextStyle(
                                           fontSize: 13,
-                                          color: hasAccess
+                                          color: allowedNow
                                               ? const Color(0xff166534)
                                               : Colors.black45,
-                                          fontWeight: hasAccess
+                                          fontWeight: allowedNow
                                               ? FontWeight.w600
                                               : FontWeight.w400,
                                         ),
@@ -811,16 +854,14 @@ class _AccessHomePageState extends State<AccessHomePage> {
                             if (busy)
                               const SizedBox.square(
                                 dimension: 22,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
+                                child: CircularProgressIndicator(strokeWidth: 2),
                               )
                             else
                               Icon(
-                                hasAccess
+                                allowedNow
                                     ? Icons.fingerprint_rounded
                                     : Icons.lock_outline_rounded,
-                                color: hasAccess
+                                color: allowedNow
                                     ? Colors.black87
                                     : Colors.black26,
                               ),
@@ -834,7 +875,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
             const SizedBox(height: 10),
             const Center(
               child: Text(
-                'Tap a door to unlock with your fingerprint or face.',
+                'Tap an authorized door to unlock with your fingerprint or face.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 12,
@@ -843,6 +884,165 @@ class _AccessHomePageState extends State<AccessHomePage> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class RegistrationPage extends StatefulWidget {
+  const RegistrationPage({
+    required this.registering,
+    required this.onRegister,
+    super.key,
+  });
+
+  final bool registering;
+  final Future<void> Function({
+    required String fullName,
+    required String phoneNumber,
+  }) onRegister;
+
+  @override
+  State<RegistrationPage> createState() => _RegistrationPageState();
+}
+
+class _RegistrationPageState extends State<RegistrationPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _fullName = TextEditingController();
+  final _phoneNumber = TextEditingController();
+
+  @override
+  void dispose() {
+    _fullName.dispose();
+    _phoneNumber.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    await widget.onRegister(
+      fullName: _fullName.text,
+      phoneNumber: _phoneNumber.text,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    Container(
+                      width: 56,
+                      height: 56,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: Colors.black,
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: const Icon(
+                        Icons.lock_open_rounded,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 26),
+                    const Text(
+                      'Register this phone',
+                      style: TextStyle(
+                        fontSize: 30,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.8,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Enter your details once. An administrator will then assign the doors you are allowed to open.',
+                      style: TextStyle(
+                        height: 1.5,
+                        color: Colors.black54,
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+                    TextFormField(
+                      controller: _fullName,
+                      textCapitalization: TextCapitalization.words,
+                      textInputAction: TextInputAction.next,
+                      autofillHints: const <String>[AutofillHints.name],
+                      decoration: const InputDecoration(
+                        labelText: 'Full name',
+                        hintText: 'e.g. Max Kabechani',
+                      ),
+                      validator: (value) {
+                        if (value == null || value.trim().length < 2) {
+                          return 'Enter your full name';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _phoneNumber,
+                      keyboardType: TextInputType.phone,
+                      textInputAction: TextInputAction.done,
+                      autofillHints: const <String>[
+                        AutofillHints.telephoneNumber,
+                      ],
+                      decoration: const InputDecoration(
+                        labelText: 'Phone number',
+                        hintText: 'e.g. +260 97 1234567',
+                      ),
+                      validator: (value) {
+                        final compact = (value ?? '').replaceAll(
+                          RegExp(r'[\s()-]'),
+                          '',
+                        );
+                        if (!RegExp(r'^\+?[0-9]{8,16}$').hasMatch(compact)) {
+                          return 'Enter a valid phone number';
+                        }
+                        return null;
+                      },
+                      onFieldSubmitted: (_) => _submit(),
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      onPressed: widget.registering ? null : _submit,
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size.fromHeight(52),
+                      ),
+                      child: widget.registering
+                          ? const SizedBox.square(
+                              dimension: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text('Register phone'),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Registration does not grant door access. Your administrator controls which locks you can open.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.4,
+                        color: Colors.black45,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
