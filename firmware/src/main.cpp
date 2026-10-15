@@ -582,7 +582,7 @@ static void handleUnlock(const std::vector<uint8_t> &payload) {
   }
   const uint32_t now = nowUnix();
   if (!clockValid) {
-    denyDoor(0x16, userId, "RTC invalid");
+    denyDoor(0x16, userId, "clock invalid");
     sendEncryptedResult(0x16);
     return;
   }
@@ -734,10 +734,15 @@ static bool syncUsers() {
 }
 
 static void formatIsoUtc(uint32_t timestamp, char output[21]) {
-  const DateTime dateTime(timestamp);
-  snprintf(output, 21, "%04u-%02u-%02uT%02u:%02u:%02uZ",
-           dateTime.year(), dateTime.month(), dateTime.day(),
-           dateTime.hour(), dateTime.minute(), dateTime.second());
+  const time_t seconds = static_cast<time_t>(timestamp);
+  struct tm utcTime;
+  if (gmtime_r(&seconds, &utcTime) == nullptr) {
+    strlcpy(output, "1970-01-01T00:00:00Z", 21);
+    return;
+  }
+  snprintf(output, 21, "%04d-%02d-%02dT%02d:%02d:%02dZ",
+           utcTime.tm_year + 1900, utcTime.tm_mon + 1, utcTime.tm_mday,
+           utcTime.tm_hour, utcTime.tm_min, utcTime.tm_sec);
 }
 
 static bool syncEvents() {
