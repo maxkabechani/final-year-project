@@ -117,10 +117,10 @@ function DevicesPage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
+    <div className="flex min-w-0 max-w-full flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
       <PageHeader eyebrow="Hardware fleet" title="Smart locks" description="Register controllers and identify the room, door or area each one protects." />
 
-      <div className="grid gap-4 px-4 lg:grid-cols-2 lg:px-6">
+      <div className="grid min-w-0 max-w-full grid-cols-1 gap-4 px-4 lg:grid-cols-2 lg:px-6">
         <Card>
           <CardHeader><CardTitle>Register smart lock</CardTitle><CardDescription>Create the lock identity before flashing its API credentials.</CardDescription></CardHeader>
           <CardContent>
