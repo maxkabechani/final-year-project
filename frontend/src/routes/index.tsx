@@ -119,7 +119,7 @@ function OverviewPage() {
   const now = Math.floor(Date.now() / 1000)
 
   return (
-    <div className="flex flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
+    <div className="flex min-w-0 max-w-full flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
       <PageHeader
         eyebrow="System overview"
         title="Smart access dashboard"
@@ -134,11 +134,11 @@ function OverviewPage() {
         grants={grants.data?.filter((grant) => grant.validUntil === null || grant.validUntil > now).length ?? 0}
       />
 
-      <div className="px-4 lg:px-6">
+      <div className="min-w-0 max-w-full px-4 lg:px-6">
         <AccessActivityChart events={events.data ?? []} />
       </div>
 
-      <div className="px-4 lg:px-6">
+      <div className="min-w-0 max-w-full px-4 lg:px-6">
         <Card>
           <CardHeader>
             <CardTitle>Recent activity</CardTitle>
