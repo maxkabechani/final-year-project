@@ -1,43 +1,55 @@
-# BLE Smart Door Access System
+# Smart Access
 
-Final-year project for controlled, logged access to the University of Zambia Computing and Informatics Department CL3 laboratory.
+Final-year project for controlled and logged access across multiple BLE smart locks.
 
-The controller authorizes access locally over BLE. It checks a one-time challenge response, biometric confirmation on the Android phone, and the user's timetable. Network connectivity is used for administration and log synchronization; an enrolled user can still unlock offline.
+Smart Access consists of a multi-lock administration dashboard, a Fastify/PostgreSQL backend, an Android BLE app, and ESP32 smart-lock firmware. A person's credential can be granted to one or many doors with recurring or one-off schedules. Unlock decisions are performed locally over BLE after phone biometric confirmation, so enrolled users can still open authorized doors when the network is unavailable.
 
 ## Repository layout
 
-- `frontend`: TanStack Start + React 19 administration dashboard. It uses TanStack Router, Query and Table and is built/run with Bun.
-- `backend`: Fastify TypeScript API running with Bun and PostgreSQL for controllers, access policy, credentials and audit events.
-- `mobile`: Flutter Android app for biometric confirmation, BLE access and credential provisioning.
-- `firmware`: ESP32-32S controller firmware for BLE authorization and door hardware.
-- `docs`: BLE and cryptographic protocol shared by the app and firmware.
+- `frontend`: TanStack Start administration dashboard using TanStack Router, Query and Table.
+- `backend`: Fastify TypeScript API running with Bun and PostgreSQL.
+- `mobile`: Flutter Android app for credential storage, biometric confirmation and BLE unlock.
+- `firmware`: PlatformIO source for the ESP32 controller.
+- `firmware-android`: single-file Arduino sketch intended for ArduinoDroid and phone-based flashing.
+- `docs`: BLE and cryptographic protocol shared by the Android app and firmware.
 
-## Web architecture
+## Deployment
 
-The dashboard and API are separate deployable applications.
+The web stack uses separate services:
 
 - Dashboard: port 3000
 - Fastify API: port 8080
 - PostgreSQL: private Docker network only
 
-The dashboard keeps its API URL and administrator token in the browser for this prototype. The Fastify API accepts dashboard requests only from origins configured in `CORS_ORIGIN`.
+Production API: `https://api-project.maxkabechani.dev`
 
-## Docker / Dokploy
+## APK
 
-The repository root contains a Compose stack with `web`, `api`, and `db` services. Configure these deployment variables:
+GitHub Actions builds an installable Android debug APK on every push.
 
-- `POSTGRES_PASSWORD`
-- `ADMIN_TOKEN` (at least 24 characters)
-- `CREDENTIAL_MASTER_KEY` (64 hexadecimal characters)
-- `FRONTEND_ORIGIN` (for example `https://access.example.com`)
-- `API_PUBLIC_URL` (for example `https://access-api.example.com`)
+Open **Actions → Smart Access CI** and download the artifact:
 
-Route the frontend domain to service `web` port 3000 and the API domain to service `api` port 8080.
+`Smart-Access-APK`
 
-## Build an installable APK
+The file inside the artifact is:
 
-Every push and pull request runs the Android build in GitHub Actions. Open the Actions tab, select the latest Project CI run, and download the `CL3-Access-APK` artifact.
+`Smart-Access.apk`
 
-## Hardware baseline
+## Firmware from an Android phone
 
-The build targets the 38-pin ESP32-32S, low-level-trigger 5 V relay module, fail-secure electric strike, door contact, exit button, RGB status LED and active buzzer. The hardware can be demonstrated incrementally while the full controller peripherals are completed.
+For the easiest phone-based upload, use:
+
+`firmware-android/SmartAccessLock/SmartAccessLock.ino`
+
+Install **NimBLE-Arduino** and **ArduinoJson** in ArduinoDroid, select **ESP32 Dev Module**, connect the ESP32 by USB OTG, compile, and upload.
+
+The default BLE-only demo configuration uses:
+
+- Device ID: `front-door-01`
+- BLE name: `LOCK-front-door-01`
+- Pairing PIN: `246810`
+- Relay GPIO 33
+- Buzzer GPIO 14
+- RGB GPIO 27/26/25
+
+Wi-Fi is optional for the first BLE demonstration.
