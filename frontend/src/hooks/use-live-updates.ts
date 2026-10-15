@@ -25,10 +25,6 @@ export function useLiveUpdates() {
 
       socket = new WebSocket(`${wsUrl}/ws/admin`)
 
-      socket.addEventListener('open', () => {
-        socket?.send(JSON.stringify({ type: 'auth', token: config.adminToken }))
-      })
-
       socket.addEventListener('message', (event) => {
         try {
           const message = JSON.parse(String(event.data)) as {
@@ -41,6 +37,7 @@ export function useLiveUpdates() {
           }
           if (message.type === 'auth_error') {
             setConnected(false)
+            socket?.close()
             return
           }
           if (message.type === 'device_seen' || message.type === 'devices_changed') {
@@ -58,7 +55,7 @@ export function useLiveUpdates() {
             void queryClient.invalidateQueries({ queryKey: ['events'] })
           }
         } catch {
-          // Ignore malformed frames; the next valid server event will recover state.
+          // Ignore malformed frames.
         }
       })
 
@@ -80,7 +77,7 @@ export function useLiveUpdates() {
       if (retry) clearTimeout(retry)
       socket?.close()
     }
-  }, [config.adminToken, config.apiUrl, configured, queryClient])
+  }, [config.apiUrl, configured, queryClient])
 
   return connected
 }
