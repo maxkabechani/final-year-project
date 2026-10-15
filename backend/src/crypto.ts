@@ -43,7 +43,7 @@ export function encryptCredentialHex(credentialHex: string, masterHex: string): 
   }
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', checkedMasterKey(masterHex), iv);
-  cipher.setAAD(Buffer.from('CL3-CREDENTIAL-V1', 'ascii'));
+  cipher.setAAD(Buffer.from('SMART-ACCESS-CREDENTIAL-V1', 'ascii'));
   const ciphertext = Buffer.concat([
     cipher.update(Buffer.from(credentialHex, 'hex')),
     cipher.final(),
@@ -59,10 +59,18 @@ export function decryptCredentialHex(value: string, masterHex: string): string {
   const iv = packed.subarray(0, 12);
   const tag = packed.subarray(12, 28);
   const ciphertext = packed.subarray(28);
-  const decipher = createDecipheriv('aes-256-gcm', checkedMasterKey(masterHex), iv);
-  decipher.setAAD(Buffer.from('CL3-CREDENTIAL-V1', 'ascii'));
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('hex');
+  const key = checkedMasterKey(masterHex);
+  for (const aad of ['SMART-ACCESS-CREDENTIAL-V1', 'CL3-CREDENTIAL-V1']) {
+    try {
+      const decipher = createDecipheriv('aes-256-gcm', key, iv);
+      decipher.setAAD(Buffer.from(aad, 'ascii'));
+      decipher.setAuthTag(tag);
+      return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('hex');
+    } catch {
+      // Try the legacy AAD so existing encrypted credentials still work.
+    }
+  }
+  throw new Error('Stored credential could not be decrypted');
 }
 
 export function scheduleAllows(
