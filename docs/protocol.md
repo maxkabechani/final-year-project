@@ -43,11 +43,11 @@ Compute the ECDH P-256 shared secret. Derive 16 bytes using HKDF-SHA256:
 
 - input key material: ECDH shared secret
 - salt: the 16-byte challenge
-- info: ASCII CL3-AES128-V1|, one byte containing the UTF-8 device ID length, then the UTF-8 device ID
+- info: ASCII SMART-ACCESS-AES128-V1|, one byte containing the UTF-8 device ID length, then the UTF-8 device ID
 
 AES-GCM uses a 12-byte random nonce and a 16-byte tag. Associated data is:
 
-- ASCII CL3-AAD-V1|
+- ASCII SMART-ACCESS-AAD-V1|
 - one byte containing the UTF-8 device ID length, then the UTF-8 device ID
 - 16-byte challenge
 - phone public key (64 bytes)
@@ -70,7 +70,7 @@ The decrypted payload for an unlock request is 49 bytes:
 
 The proof is HMAC-SHA256 keyed by the user's 32-byte credential over:
 
-- ASCII CL3-HMAC-V1|
+- ASCII SMART-ACCESS-HMAC-V1|
 - one byte containing the UTF-8 device ID length, then the UTF-8 device ID
 - 16-byte challenge
 - phone public key (64 bytes)
@@ -80,7 +80,7 @@ The proof is HMAC-SHA256 keyed by the user's 32-byte credential over:
 
 The controller validates the tag, proof, one-time challenge, credential status, and local timetable. It then emits a separately encrypted result notification.
 
-The result notification is byte 0x04, a 12-byte random AES-GCM nonce, ciphertext, and a 16-byte tag. Its plaintext is one status byte. Result associated data is the request associated data followed by ASCII CL3-RESULT.
+The result notification is byte 0x04, a 12-byte random AES-GCM nonce, ciphertext, and a 16-byte tag. Its plaintext is one status byte. Result associated data is the request associated data followed by ASCII SMART-ACCESS-RESULT.
 
 ### Enrollment request
 
