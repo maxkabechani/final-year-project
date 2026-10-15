@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
+import { Smartphone, UsersRound } from 'lucide-react'
 import { useMemo } from 'react'
 import { DataTable } from '@/components/DataTable'
 import { PageError } from '@/components/PageState'
@@ -14,9 +15,9 @@ export const Route = createFileRoute('/people')({
   head: () => ({
     title: 'People | Smart Access',
     meta: [
-      { name: 'description', content: 'Manage the people who can be assigned access to one or more smart locks.' },
+      { name: 'description', content: 'View registered Smart Access users and their assigned smart locks.' },
       { property: 'og:title', content: 'People | Smart Access' },
-      { property: 'og:description', content: 'Manage the people who can be assigned access to one or more smart locks.' },
+      { property: 'og:description', content: 'View registered Smart Access users and their assigned smart locks.' },
       { name: 'twitter:card', content: 'summary' },
     ],
   }),
@@ -33,9 +34,21 @@ function PeoplePage() {
       header: 'Person',
       cell: ({ row }) => (
         <div className="flex items-center gap-3">
-          <div className="grid size-8 place-items-center rounded-full bg-muted text-xs font-semibold">{row.original.name.slice(0, 1).toUpperCase()}</div>
-          <div><div className="font-medium">{row.original.name}</div><code className="text-xs text-muted-foreground">{row.original.personId.slice(0, 8)}</code></div>
+          <div className="grid size-9 place-items-center rounded-full bg-muted text-xs font-semibold">
+            {row.original.name.slice(0, 1).toUpperCase()}
+          </div>
+          <div>
+            <div className="font-medium">{row.original.name}</div>
+            <code className="text-xs text-muted-foreground">{row.original.personId.slice(0, 8)}</code>
+          </div>
         </div>
+      ),
+    },
+    {
+      accessorKey: 'phoneNumber',
+      header: 'Phone number',
+      cell: ({ getValue }) => (
+        <span className="font-medium">{String(getValue() || 'Not registered from app')}</span>
       ),
     },
     {
@@ -45,23 +58,67 @@ function PeoplePage() {
     },
     {
       accessorKey: 'createdAt',
-      header: 'Created',
-      cell: ({ getValue }) => <span className="text-muted-foreground">{new Date(String(getValue())).toLocaleDateString()}</span>,
+      header: 'Registered',
+      cell: ({ getValue }) => (
+        <span className="text-muted-foreground">{new Date(String(getValue())).toLocaleString()}</span>
+      ),
     },
   ], [])
 
-  if (!configured) return <div className="p-4 lg:p-6"><Card><CardContent className="py-8 text-sm text-muted-foreground">Configure the API connection first.</CardContent></Card></div>
+  if (!configured) {
+    return (
+      <div className="p-4 lg:p-6">
+        <Card><CardContent className="py-8 text-sm text-muted-foreground">Configure the API connection first.</CardContent></Card>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
-      <PageHeader eyebrow="Identity directory" title="People" description="People can be assigned to one or many smart locks with independent schedules." />
-      <div className="px-4 lg:px-6">
+      <PageHeader
+        eyebrow="Identity directory"
+        title="People"
+        description="Users register their phone with their full name and phone number, then appear here ready for access assignment."
+      />
+
+      <div className="grid gap-4 px-4 lg:grid-cols-[1fr_320px] lg:px-6">
         <Card>
-          <CardHeader><CardTitle>People directory</CardTitle><CardDescription>Create new people while granting access; they then remain available for other locks.</CardDescription></CardHeader>
+          <CardHeader>
+            <CardTitle>Registered people</CardTitle>
+            <CardDescription>{people.data?.length ?? 0} person(s) known to Smart Access.</CardDescription>
+          </CardHeader>
           <CardContent>
-            {people.error ? <PageError error={people.error} /> : (
-              <DataTable data={people.data ?? []} columns={columns} emptyMessage={people.isLoading ? 'Loading people…' : 'No people have been created yet.'} filterPlaceholder="Search people…" />
+            {people.error ? (
+              <PageError error={people.error} />
+            ) : (
+              <DataTable
+                data={people.data ?? []}
+                columns={columns}
+                emptyMessage={people.isLoading ? 'Loading people…' : 'No one has registered from the app yet.'}
+                filterPlaceholder="Search name or phone number…"
+              />
             )}
+          </CardContent>
+        </Card>
+
+        <Card className="h-fit">
+          <CardHeader>
+            <div className="mb-2 grid size-9 place-items-center rounded-lg bg-muted">
+              <Smartphone className="size-4" />
+            </div>
+            <CardTitle>Simple registration</CardTitle>
+            <CardDescription>
+              A user installs Smart Access, enters their full name and phone number once, then appears here automatically.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm text-muted-foreground">
+            <div className="flex gap-2"><Badge variant="outline">1</Badge><span>User registers phone.</span></div>
+            <div className="flex gap-2"><Badge variant="outline">2</Badge><span>Administrator assigns one or more doors.</span></div>
+            <div className="flex gap-2"><Badge variant="outline">3</Badge><span>Nearby authorized locks become unlockable in the app.</span></div>
+            <div className="flex items-center gap-2 border-t pt-3 text-xs">
+              <UsersRound className="size-4" />
+              <span>No access is granted by registration alone.</span>
+            </div>
           </CardContent>
         </Card>
       </div>
