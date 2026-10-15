@@ -54,7 +54,7 @@ export function AppSidebar({
       <aside
         aria-label="Primary navigation"
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex h-svh w-72 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-transform duration-200 md:sticky md:top-0 md:z-20 md:translate-x-0 md:transition-[width]',
+          'fixed inset-y-0 left-0 z-50 flex h-svh w-72 shrink-0 flex-col bg-sidebar text-sidebar-foreground transition-transform duration-200 md:sticky md:top-0 md:z-20 md:translate-x-0 md:transition-[width]',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
           collapsed ? 'md:w-16' : 'md:w-64',
         )}
