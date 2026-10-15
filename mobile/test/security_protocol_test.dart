@@ -1,4 +1,4 @@
-import 'package:cl3_access/security_protocol.dart';
+import 'package:smart_access/security_protocol.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -10,7 +10,7 @@ void main() {
   });
 
   test('P-256 controller challenge derives a phone session', () async {
-    const deviceId = 'cl3-door-01';
+    const deviceId = 'front-door-01';
     final phone = AccessProtocol.newPhoneKeyPair();
     final controller = AccessProtocol.newPhoneKeyPair();
     final controllerHello = AccessProtocol.helloValue(controller);
