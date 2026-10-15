@@ -74,15 +74,15 @@ function PeoplePage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
+    <div className="flex min-w-0 max-w-full flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
       <PageHeader
         eyebrow="Identity directory"
         title="People"
         description="Users register their phone with their full name and phone number, then appear here ready for access assignment."
       />
 
-      <div className="grid gap-4 px-4 lg:grid-cols-[1fr_320px] lg:px-6">
-        <Card>
+      <div className="grid min-w-0 max-w-full grid-cols-1 gap-4 px-4 lg:px-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
+        <Card className="min-w-0">
           <CardHeader>
             <CardTitle>Registered people</CardTitle>
             <CardDescription>{people.data?.length ?? 0} person(s) known to Smart Access.</CardDescription>
