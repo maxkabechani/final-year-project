@@ -13,6 +13,7 @@ dependencies:
   device_info_plus: ^13.3.0
   flutter_blue_plus: ^2.3.14
   flutter_secure_storage: ^11.2.0
+  http: ^1.5.0
   local_auth: ^3.0.2
   permission_handler: ^12.0.1
   pointycastle: ^4.0.0
