@@ -48,7 +48,7 @@ export function DataTable<T>({
   const rows = table.getRowModel().rows
 
   return (
-    <div className="space-y-3">
+    <div className="min-w-0 max-w-full space-y-3">
       <div className="flex items-center justify-between gap-3">
         <div className="relative w-full max-w-sm">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -65,8 +65,8 @@ export function DataTable<T>({
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-lg border bg-card">
-        <div className="overflow-x-auto">
+      <div className="min-w-0 max-w-full overflow-hidden rounded-lg border bg-card">
+        <div className="w-full max-w-full overflow-x-auto">
           <table className="w-full min-w-[640px] caption-bottom text-sm">
             <thead className="bg-muted/50 [&_tr]:border-b">
               {table.getHeaderGroups().map((group) => (
