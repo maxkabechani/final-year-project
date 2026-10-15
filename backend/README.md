@@ -1,6 +1,6 @@
-# CL3 Fastify API
+# Smart Access Fastify API
 
-TypeScript/Fastify API for the CL3 smart access controller. Bun is the package manager/runtime and PostgreSQL is the persistent database.
+TypeScript/Fastify API for Smart Access controllers. Bun is the package manager/runtime and PostgreSQL is the persistent database.
 
 The API is intentionally separate from the TanStack frontend in `../frontend`.
 
