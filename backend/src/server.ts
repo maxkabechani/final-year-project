@@ -602,17 +602,20 @@ app.get('/api/access-grants', { preHandler: requireAdmin }, async (request) => {
 
 app.post('/api/access-grants', { preHandler: requireAdmin }, async (request, reply) => {
   const body = z.object({
-    personId: z.string().uuid().optional(),
-    name: z.string().trim().min(1).max(120).optional(),
+    personId: z.string().uuid(),
     deviceId: deviceIdSchema,
     schedule: scheduleSchema,
-  }).refine((value) => Boolean(value.personId || value.name), {
-    message: 'Select a person or provide a name',
   }).parse(request.body);
 
   const grant = await upsertGrant(body);
   broadcast('access_changed', { deviceId: grant.deviceId, personId: grant.personId });
-  return reply.code(201).send(grant);
+  return reply.code(201).send({
+    grantId: grant.grantId,
+    personId: grant.personId,
+    name: grant.name,
+    deviceId: grant.deviceId,
+    schedule: grant.schedule,
+  });
 });
 
 app.delete<{ Params: { grantId: string } }>(
