@@ -26,6 +26,10 @@ export function newDeviceToken(): string {
   return randomBytes(32).toString('base64url');
 }
 
+export function newMobileToken(): string {
+  return randomBytes(32).toString('base64url');
+}
+
 export function newCredential(): Buffer {
   return randomBytes(32);
 }
