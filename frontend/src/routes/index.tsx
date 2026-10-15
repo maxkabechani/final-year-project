@@ -15,7 +15,18 @@ import type { AccessEvent } from '@/lib/api'
 import { useAdminConfig } from '@/lib/config'
 import { useAccessGrants, useDevices, useEvents, usePeople } from '@/lib/queries'
 
-export const Route = createFileRoute('/')({ component: OverviewPage })
+export const Route = createFileRoute('/')({
+  head: () => ({
+    title: 'Dashboard | Smart Access',
+    meta: [
+      { name: 'description', content: 'Monitor smart locks, online status, people, access grants and recent access activity.' },
+      { property: 'og:title', content: 'Dashboard | Smart Access' },
+      { property: 'og:description', content: 'Monitor smart locks, online status, people, access grants and recent access activity.' },
+      { name: 'twitter:card', content: 'summary' },
+    ],
+  }),
+  component: OverviewPage,
+})
 
 function OverviewPage() {
   const { configured } = useAdminConfig()
