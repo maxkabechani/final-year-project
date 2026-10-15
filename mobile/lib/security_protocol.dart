@@ -90,7 +90,7 @@ class AccessProtocol {
     final shared = SecretKey(sharedSecretBytes);
     final deviceBytes = utf8.encode(deviceId);
     final info = <int>[
-      ...ascii.encode('CL3-AES128-V1|'),
+      ...ascii.encode('SMART-ACCESS-AES128-V1|'),
       deviceBytes.length,
       ...deviceBytes,
     ];
@@ -152,12 +152,12 @@ class AccessProtocol {
     return _aes.decrypt(
       box,
       secretKey: _sessionKey,
-      aad: <int>[..._associatedData(), ...ascii.encode('CL3-RESULT')],
+      aad: <int>[..._associatedData(), ...ascii.encode('SMART-ACCESS-RESULT')],
     );
   }
 
   List<int> _associatedData() => <int>[
-        ...ascii.encode('CL3-AAD-V1|'),
+        ...ascii.encode('SMART-ACCESS-AAD-V1|'),
         utf8.encode(deviceId).length,
         ...utf8.encode(deviceId),
         ...challenge,
@@ -166,7 +166,7 @@ class AccessProtocol {
       ];
 
   List<int> _proofTranscript(String userId, int operation) => <int>[
-        ...ascii.encode('CL3-HMAC-V1|'),
+        ...ascii.encode('SMART-ACCESS-HMAC-V1|'),
         utf8.encode(deviceId).length,
         ...utf8.encode(deviceId),
         ...challenge,
