@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:cl3_access/backend_client.dart';
-import 'package:cl3_access/security_protocol.dart';
+import 'package:smart_access/backend_client.dart';
+import 'package:smart_access/security_protocol.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
