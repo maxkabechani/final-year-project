@@ -30,7 +30,7 @@ export function SiteHeader({
   const title = titles[pathname] ?? 'Smart Access'
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80 lg:px-6">
+    <header className="sticky top-0 z-30 flex h-14 min-w-0 max-w-full shrink-0 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80 lg:px-6">
       <Button
         type="button"
         variant="ghost"
