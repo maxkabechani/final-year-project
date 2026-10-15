@@ -12,7 +12,7 @@ const titles: Record<string, string> = {
   '/people': 'People',
   '/access': 'Access control',
   '/events': 'Activity',
-  '/settings': 'Settings',
+  '/settings': 'Administrators',
 }
 
 type SiteHeaderProps = {
