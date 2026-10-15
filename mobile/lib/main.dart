@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:smart_access/backend_client.dart';
-import 'package:smart_access/security_protocol.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,11 +9,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
-
-const apiBaseUrl = String.fromEnvironment(
-  'API_BASE_URL',
-  defaultValue: 'https://api-project.maxkabechani.dev',
-);
+import 'package:smart_access/security_protocol.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,24 +21,61 @@ class SmartAccessApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const navy = Color(0xff1d285f);
+    final scheme = ColorScheme.fromSeed(
+      seedColor: Colors.black,
+      brightness: Brightness.light,
+      primary: Colors.black,
+      surface: Colors.white,
+    );
+
     return MaterialApp(
       title: 'Smart Access',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xff087f8c),
-          primary: navy,
+        colorScheme: scheme,
+        scaffoldBackgroundColor: const Color(0xfff7f7f7),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xfff7f7f7),
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
         ),
-        scaffoldBackgroundColor: const Color(0xfff4f6fb),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-          isDense: true,
+        cardTheme: const CardThemeData(
+          color: Colors.white,
+          margin: EdgeInsets.zero,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(20)),
+            side: BorderSide(color: Color(0xffe8e8e8)),
+          ),
         ),
       ),
       home: const AccessHomePage(),
     );
+  }
+}
+
+class NearbyDoor {
+  const NearbyDoor({
+    required this.deviceId,
+    required this.device,
+    required this.rssi,
+  });
+
+  final String deviceId;
+  final BluetoothDevice device;
+  final int rssi;
+
+  String get title {
+    final words = deviceId
+        .split(RegExp(r'[-_.]+'))
+        .where((part) => part.isNotEmpty)
+        .map((part) {
+          if (part.length <= 2 && int.tryParse(part) != null) return part;
+          return part[0].toUpperCase() + part.substring(1);
+        })
+        .toList();
+    return words.join(' ');
   }
 }
 
@@ -59,205 +90,68 @@ class _AccessHomePageState extends State<AccessHomePage> {
   static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
   static final LocalAuthentication _localAuth = LocalAuthentication();
 
-  final _apiUrl = TextEditingController(text: apiBaseUrl);
-  final _adminToken = TextEditingController();
-  final _deviceId = TextEditingController(text: 'front-door-01');
-  final _deviceName = TextEditingController(text: 'Front Door');
-  final _userName = TextEditingController(text: 'Student');
-  final _pairingPin = TextEditingController();
-  final _credentialImport = TextEditingController();
+  final Map<String, NearbyDoor> _doors = <String, NearbyDoor>{};
+  final Map<String, bool> _hasAccess = <String, bool>{};
 
-  BluetoothDevice? _device;
-  BluetoothCharacteristic? _control;
-  BluetoothCharacteristic? _messages;
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   StreamSubscription<List<int>>? _messageSubscription;
+  BluetoothCharacteristic? _control;
+  BluetoothCharacteristic? _messages;
   Completer<List<int>>? _pendingMessage;
   int? _pendingOpcode;
-  bool _busy = false;
-  String _status = 'Controller disconnected';
-  String? _credentialUserId;
-  List<Map<String, dynamic>> _recentEvents = const [];
-  final Set<int> _selectedDays = {1, 2, 3, 4, 5};
-  TimeOfDay _startTime = const TimeOfDay(hour: 8, minute: 0);
-  TimeOfDay _endTime = const TimeOfDay(hour: 18, minute: 0);
 
-  int get _daysMask =>
-      _selectedDays.fold<int>(0, (mask, day) => mask | (1 << (day - 1)));
+  bool _scanning = false;
+  String? _busyDoorId;
+  String? _recentlyUnlockedDoorId;
+  Timer? _recentSuccessTimer;
 
-  int get _startMinute => _startTime.hour * 60 + _startTime.minute;
-  int get _endMinute => _endTime.hour * 60 + _endTime.minute;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scan());
+  }
 
   @override
   void dispose() {
-    _apiUrl.dispose();
-    _adminToken.dispose();
-    _deviceId.dispose();
-    _deviceName.dispose();
-    _userName.dispose();
-    _pairingPin.dispose();
-    _credentialImport.dispose();
     _scanSubscription?.cancel();
     _messageSubscription?.cancel();
-    _device?.disconnect();
+    _recentSuccessTimer?.cancel();
+    FlutterBluePlus.stopScan();
     super.dispose();
   }
 
-  BackendClient _backend() =>
-      BackendClient(_apiUrl.text, _adminToken.text);
-
-  Future<void> _runBusy(
-    String message,
-    Future<void> Function() action,
-  ) async {
-    if (_busy) return;
-    setState(() {
-      _busy = true;
-      _status = message;
-    });
-    try {
-      await action();
-    } catch (error) {
-      _setStatus(error.toString().replaceFirst('Exception: ', ''));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  void _setStatus(String message) {
-    if (mounted) setState(() => _status = message);
-  }
-
-  Future<void> _registerDevice() => _runBusy(
-        'Registering controller…',
-        () async {
-          final result = await _backend().registerDevice(
-            deviceId: _deviceId.text.trim(),
-            name: _deviceName.text.trim(),
-          );
-          final deviceId = result['deviceId']?.toString() ?? '';
-          final token = result['deviceToken']?.toString() ?? '';
-          if (deviceId.isEmpty || token.isEmpty) {
-            throw const FormatException('Backend did not return a device token');
-          }
-          _deviceId.text = deviceId;
-          await Clipboard.setData(ClipboardData(text: token));
-          _setStatus(
-            'Controller registered. Device token copied; add it to firmware/include/smart_lock_local_config.h.',
-          );
-        },
-      );
-
-  Future<void> _createCredential() => _runBusy(
-        'Creating user credential…',
-        () async {
-          if (_daysMask == 0 || _startMinute >= _endMinute) {
-            throw const FormatException(
-              'Choose at least one day and an end time after the start time.',
-            );
-          }
-          final result = await _backend().createUser(
-            deviceId: _deviceId.text.trim(),
-            name: _userName.text.trim(),
-            daysMask: _daysMask,
-            startMinute: _startMinute,
-            endMinute: _endMinute,
-            validFrom: DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000,
-            validUntil: 0,
-          );
-          final userId = result['userId']?.toString();
-          final keyHex = result['credentialKeyHex']?.toString();
-          final schedule = result['schedule'];
-          if (userId == null ||
-              keyHex == null ||
-              schedule is! Map<String, dynamic>) {
-            throw const FormatException('Backend returned an invalid credential');
-          }
-          final credential = <String, Object?>{
-            'userId': userId,
-            'credentialKeyHex': keyHex,
-            'schedule': schedule,
-          };
-          await _secureStorage.write(
-            key: _credentialStorageKey(_deviceId.text.trim()),
-            value: jsonEncode(credential),
-          );
-          setState(() {
-            _credentialUserId = userId;
-            _status =
-                'Credential created and protected in phone storage. Connect and enroll it at the controller.';
-          });
-        },
-      );
-
   String _credentialStorageKey(String deviceId) =>
-      'smart-access.credential.$deviceId';
+      'smart-access.credential.' + deviceId;
 
-  Future<Map<String, dynamic>> _loadCredential() async {
-    final deviceId = _deviceId.text.trim();
-    final raw = await _secureStorage.read(
-      key: _credentialStorageKey(deviceId),
-    );
-    if (raw == null) {
-      throw const FormatException(
-        'Create a phone credential before enrolling or unlocking.',
-      );
-    }
+  Future<Map<String, dynamic>?> _loadCredential(String deviceId) async {
+    final raw = await _secureStorage.read(key: _credentialStorageKey(deviceId));
+    if (raw == null) return null;
     final decoded = jsonDecode(raw);
-    if (decoded is! Map<String, dynamic>) {
-      throw const FormatException('Stored phone credential is invalid');
-    }
-    _credentialUserId = decoded['userId']?.toString();
-    return decoded;
+    return decoded is Map<String, dynamic> ? decoded : null;
   }
 
-  Future<void> _importCredential() => _runBusy(
-        'Importing administrator credential…',
-        () async {
-          final decoded = jsonDecode(_credentialImport.text.trim());
-          if (decoded is! Map<String, dynamic>) {
-            throw const FormatException('Paste the credential JSON from the admin page.');
-          }
-          final userId = decoded['userId']?.toString();
-          final keyHex = decoded['credentialKeyHex']?.toString();
-          final schedule = decoded['schedule'];
-          if (userId == null ||
-              keyHex == null ||
-              !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(keyHex) ||
-              schedule is! Map<String, dynamic>) {
-            throw const FormatException('Administrator credential data is incomplete.');
-          }
-          uuidToBytes(userId);
-          final daysMask = (schedule['daysMask'] as num?)?.toInt() ?? 0;
-          final startMinute = (schedule['startMinute'] as num?)?.toInt() ?? -1;
-          final endMinute = (schedule['endMinute'] as num?)?.toInt() ?? -1;
-          if (daysMask == 0 ||
-              daysMask > 127 ||
-              startMinute < 0 ||
-              startMinute >= endMinute ||
-              endMinute > 1440) {
-            throw const FormatException('Administrator timetable is invalid.');
-          }
-          final credential = <String, Object?>{
-            'userId': userId,
-            'credentialKeyHex': keyHex,
-            'schedule': schedule,
-          };
-          await _secureStorage.write(
-            key: _credentialStorageKey(_deviceId.text.trim()),
-            value: jsonEncode(credential),
-          );
-          setState(() {
-            _credentialUserId = userId;
-            _status = 'Credential imported and protected in phone storage.';
-          });
-        },
-      );
+  Future<void> _refreshAccessState() async {
+    final entries = await Future.wait(
+      _doors.keys.map((deviceId) async {
+        final raw = await _secureStorage.read(
+          key: _credentialStorageKey(deviceId),
+        );
+        return MapEntry(deviceId, raw != null);
+      }),
+    );
+    if (!mounted) return;
+    setState(() {
+      for (final entry in entries) {
+        _hasAccess[entry.key] = entry.value;
+      }
+    });
+  }
 
   Future<void> _requestBlePermissions() async {
     if (!Platform.isAndroid) {
-      throw UnsupportedError('This demonstration build targets Android.');
+      throw UnsupportedError('Smart Access currently targets Android.');
     }
+
     final androidInfo = await DeviceInfoPlugin().androidInfo;
     final requiredPermissions = androidInfo.version.sdkInt >= 31
         ? <Permission>[
@@ -265,96 +159,144 @@ class _AccessHomePageState extends State<AccessHomePage> {
             Permission.bluetoothConnect,
           ]
         : <Permission>[Permission.locationWhenInUse];
+
     final results = await requiredPermissions.request();
-    if (requiredPermissions.any((permission) => results[permission]?.isGranted != true)) {
+    if (requiredPermissions.any(
+      (permission) => results[permission]?.isGranted != true,
+    )) {
       throw const FormatException(
-        'Bluetooth permission is required to find the controller.',
+        'Bluetooth permission is required to find nearby doors.',
       );
     }
   }
 
-  Future<void> _scanAndConnect() => _runBusy(
-        'Scanning for the smart lock…',
-        () async {
-          await _requestBlePermissions();
-          if (!await FlutterBluePlus.isSupported) {
-            throw const FormatException('Bluetooth LE is not supported here.');
-          }
-          final targetName = 'LOCK-${_deviceId.text.trim()}';
-          final found = Completer<ScanResult>();
-          await _scanSubscription?.cancel();
-          _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
-            for (final result in results) {
-              final advertised =
-                  result.advertisementData.advName.isNotEmpty
-                      ? result.advertisementData.advName
-                      : result.device.platformName;
-              if (advertised == targetName && !found.isCompleted) {
-                found.complete(result);
-              }
-            }
-          });
-          await FlutterBluePlus.startScan(
-            withServices: <Guid>[Guid(bleServiceUuid)],
-            timeout: const Duration(seconds: 15),
+  Future<void> _scan() async {
+    if (_scanning || _busyDoorId != null) return;
+
+    try {
+      await _requestBlePermissions();
+      if (!await FlutterBluePlus.isSupported) {
+        throw const FormatException('Bluetooth LE is not supported on this phone.');
+      }
+
+      await FlutterBluePlus.stopScan();
+      await _scanSubscription?.cancel();
+
+      if (mounted) {
+        setState(() {
+          _scanning = true;
+          _doors.clear();
+        });
+      }
+
+      _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
+        var changed = false;
+        for (final result in results) {
+          final advertised = result.advertisementData.advName.isNotEmpty
+              ? result.advertisementData.advName
+              : result.device.platformName;
+
+          if (!advertised.startsWith('LOCK-')) continue;
+
+          final deviceId = advertised.substring(5);
+          if (deviceId.isEmpty) continue;
+
+          _doors[deviceId] = NearbyDoor(
+            deviceId: deviceId,
+            device: result.device,
+            rssi: result.rssi,
           );
-          final result = await found.future.timeout(
-            const Duration(seconds: 16),
-            onTimeout: () => throw TimeoutException(
-              'No controller named $targetName was found.',
-            ),
-          );
-          await FlutterBluePlus.stopScan();
-          await _device?.disconnect();
-          _device = result.device;
-          await _device!.connect(
-            license: License.nonprofit,
-            timeout: const Duration(seconds: 15),
-          );
-          try {
-            await _device!.requestMtu(247);
-          } catch (_) {
-            // The protocol messages also fit the default Android MTU.
-          }
-          final services = await _device!.discoverServices();
-          final service = services.firstWhere(
-            (item) => item.serviceUuid == Guid(bleServiceUuid),
-            orElse: () => throw const FormatException(
-              'Controller BLE service was not found.',
-            ),
-          );
-          _control = service.characteristics.firstWhere(
-            (item) => item.characteristicUuid == Guid(bleControlUuid),
-            orElse: () =>
-                throw const FormatException('Control characteristic missing.'),
-          );
-          _messages = service.characteristics.firstWhere(
-            (item) => item.characteristicUuid == Guid(bleMessageUuid),
-            orElse: () =>
-                throw const FormatException('Message characteristic missing.'),
-          );
-          await _messages!.setNotifyValue(true);
-          await _messageSubscription?.cancel();
-          _messageSubscription = _messages!.onValueReceived.listen(
-            _receiveMessage,
-          );
-          _setStatus('Connected to $targetName');
-        },
+          changed = true;
+        }
+
+        if (changed && mounted) {
+          setState(() {});
+          unawaited(_refreshAccessState());
+        }
+      });
+
+      await FlutterBluePlus.startScan(
+        withServices: <Guid>[Guid(bleServiceUuid)],
+        timeout: const Duration(seconds: 8),
       );
+      await Future<void>.delayed(const Duration(seconds: 8));
+    } catch (error) {
+      if (mounted) {
+        _showMessage(
+          error.toString().replaceFirst('FormatException: ', ''),
+          error: true,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _scanning = false);
+    }
+  }
+
+  Future<void> _connect(NearbyDoor door) async {
+    await FlutterBluePlus.stopScan();
+    await door.device.connect(
+      license: License.nonprofit,
+      timeout: const Duration(seconds: 15),
+    );
+
+    try {
+      await door.device.requestMtu(247);
+    } catch (_) {}
+
+    final services = await door.device.discoverServices();
+    final service = services.firstWhere(
+      (item) => item.serviceUuid == Guid(bleServiceUuid),
+      orElse: () => throw const FormatException(
+        'This device is not a Smart Access lock.',
+      ),
+    );
+
+    _control = service.characteristics.firstWhere(
+      (item) => item.characteristicUuid == Guid(bleControlUuid),
+      orElse: () => throw const FormatException('Door control is unavailable.'),
+    );
+    _messages = service.characteristics.firstWhere(
+      (item) => item.characteristicUuid == Guid(bleMessageUuid),
+      orElse: () => throw const FormatException('Door response channel is unavailable.'),
+    );
+
+    await _messages!.setNotifyValue(true);
+    await _messageSubscription?.cancel();
+    _messageSubscription = _messages!.onValueReceived.listen(_receiveMessage);
+  }
+
+  Future<void> _disconnect(BluetoothDevice device) async {
+    _control = null;
+    _messages = null;
+    _pendingOpcode = null;
+    final waiter = _pendingMessage;
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.completeError(StateError('Door disconnected.'));
+    }
+    _pendingMessage = null;
+    await _messageSubscription?.cancel();
+    _messageSubscription = null;
+
+    try {
+      await device.disconnect();
+    } catch (_) {}
+  }
 
   Future<List<int>> _waitForMessage(int opcode) {
     if (_pendingMessage != null && !_pendingMessage!.isCompleted) {
-      throw StateError('A BLE request is already in progress');
+      throw StateError('Another door request is already in progress.');
     }
+
     final completer = Completer<List<int>>();
     _pendingOpcode = opcode;
     _pendingMessage = completer;
+
     return completer.future.timeout(
       const Duration(seconds: 8),
       onTimeout: () {
         _pendingOpcode = null;
         _pendingMessage = null;
-        throw TimeoutException('Controller response timed out.');
+        throw TimeoutException('The door did not respond.');
       },
     );
   }
@@ -367,30 +309,36 @@ class _AccessHomePageState extends State<AccessHomePage> {
         bytes[0] != _pendingOpcode) {
       return;
     }
+
     _pendingOpcode = null;
+    _pendingMessage = null;
     waiter.complete(List<int>.from(bytes));
   }
 
-  Future<AccessProtocol> _beginSession() async {
+  Future<AccessProtocol> _beginSession(String deviceId) async {
     final control = _control;
     if (control == null) {
-      throw const FormatException('Connect to the controller first.');
+      throw const FormatException('Door connection was lost.');
     }
+
     final phoneKeyPair = AccessProtocol.newPhoneKeyPair();
-    final phonePublic = AccessProtocol.helloValue(phoneKeyPair);
     final response = _waitForMessage(0x02);
+
     try {
-      await control.write(phonePublic, withoutResponse: false);
+      await control.write(
+        AccessProtocol.helloValue(phoneKeyPair),
+        withoutResponse: false,
+      );
     } catch (_) {
       _pendingOpcode = null;
       _pendingMessage = null;
       rethrow;
     }
-    final challenge = await response;
+
     return AccessProtocol.fromChallenge(
-      deviceId: _deviceId.text.trim(),
+      deviceId: deviceId,
       phoneKeyPair: phoneKeyPair,
-      message: challenge,
+      message: await response,
     );
   }
 
@@ -400,8 +348,9 @@ class _AccessHomePageState extends State<AccessHomePage> {
   ) async {
     final control = _control;
     if (control == null) {
-      throw const FormatException('Controller disconnected.');
+      throw const FormatException('Door connection was lost.');
     }
+
     final response = _waitForMessage(0x04);
     try {
       final encrypted = await session.encryptPayload(payload);
@@ -410,8 +359,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
         withoutResponse: false,
         allowLongWrite: true,
       );
-      final message = await response;
-      return await session.decryptResult(message);
+      return session.decryptResult(await response);
     } catch (_) {
       _pendingOpcode = null;
       _pendingMessage = null;
@@ -419,317 +367,481 @@ class _AccessHomePageState extends State<AccessHomePage> {
     }
   }
 
-  Future<void> _enrollPhone() => _runBusy(
-        'Enrolling this phone…',
-        () async {
-          final credential = await _loadCredential();
-          final pin = _pairingPin.text.trim();
-          final schedule = credential['schedule'] as Map<String, dynamic>;
-          final session = await _beginSession();
-          if (session.mode != 1) {
-            throw const FormatException(
-              'Controller is not in physical pairing mode. Hold the exit button and use the PIN shown on the LCD.',
-            );
-          }
-          final payload = enrollmentPayload(
-            userId: credential['userId'].toString(),
-            credential: hexToBytes(
-              credential['credentialKeyHex'].toString(),
-            ),
-            daysMask: (schedule['daysMask'] as num).toInt(),
-            startMinute: (schedule['startMinute'] as num).toInt(),
-            endMinute: (schedule['endMinute'] as num).toInt(),
-            validFrom: (schedule['validFrom'] as num).toInt(),
-            validUntil: schedule['validUntil'] == null
-                ? 0
-                : (schedule['validUntil'] as num).toInt(),
-            pairingPin: pin,
-          );
-          final result = await _sendEncrypted(session, payload);
-          if (result.isEmpty || result[0] != 0x13) {
-            throw const FormatException('Controller rejected enrollment.');
-          }
-          _setStatus('Phone enrolled. BLE unlock works without Wi-Fi.');
-        },
+  Future<void> _unlock(NearbyDoor door) async {
+    if (_busyDoorId != null) return;
+
+    final credential = await _loadCredential(door.deviceId);
+    if (credential == null) {
+      _showMessage('You do not have access to ' + door.title + '.', error: true);
+      return;
+    }
+
+    setState(() => _busyDoorId = door.deviceId);
+
+    try {
+      final available = await _localAuth.getAvailableBiometrics();
+      if (available.isEmpty) {
+        throw const FormatException(
+          'Set up fingerprint or face unlock on this phone first.',
+        );
+      }
+
+      final accepted = await _localAuth.authenticate(
+        localizedReason: 'Unlock ' + door.title,
+        biometricOnly: true,
+        persistAcrossBackgrounding: true,
+      );
+      if (!accepted) return;
+
+      await _connect(door);
+
+      final session = await _beginSession(door.deviceId);
+      final userId = credential['userId']?.toString() ?? '';
+      final keyHex = credential['credentialKeyHex']?.toString() ?? '';
+      uuidToBytes(userId);
+
+      if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(keyHex)) {
+        throw const FormatException('Your access on this phone is invalid.');
+      }
+
+      final proof = await session.proof(
+        userId: userId,
+        credential: hexToBytes(keyHex),
+        operation: 0x01,
+      );
+      final result = await _sendEncrypted(
+        session,
+        unlockPayload(userId: userId, proof: proof),
       );
 
-  Future<void> _unlock() => _runBusy(
-        'Confirm your identity…',
-        () async {
-          final credential = await _loadCredential();
-          final available = await _localAuth.getAvailableBiometrics();
-          if (available.isEmpty) {
-            throw const FormatException(
-              'Set up fingerprint or face unlock on this phone first.',
-            );
-          }
-          final accepted = await _localAuth.authenticate(
-            localizedReason: 'Confirm your identity to unlock this smart lock',
-            biometricOnly: true,
-            persistAcrossBackgrounding: true,
-          );
-          if (!accepted) {
-            throw const FormatException('Biometric confirmation cancelled.');
-          }
-          final session = await _beginSession();
-          final userId = credential['userId'].toString();
-          final keyBytes = hexToBytes(
-            credential['credentialKeyHex'].toString(),
-          );
-          final proof = await session.proof(
-            userId: userId,
-            credential: keyBytes,
-            operation: 0x01,
-          );
-          final result = await _sendEncrypted(
-            session,
-            unlockPayload(userId: userId, proof: proof),
-          );
-          if (result.isEmpty) {
-            throw const FormatException('Controller returned an empty result.');
-          }
-          switch (result[0]) {
-            case 0x10:
-              _setStatus('Access granted. The strike unlocks for five seconds.');
-              break;
-            case 0x11:
-              _setStatus('Access denied. Credential is not authorized.');
-              break;
-            case 0x12:
-              _setStatus('Access denied. Outside your permitted timetable.');
-              break;
-            case 0x16:
-              _setStatus('Access denied. Controller clock is not valid.');
-              break;
-            default:
-              _setStatus('Controller denied access.');
-              break;
-          }
-        },
-      );
+      if (result.isEmpty) {
+        throw const FormatException('The door returned an empty response.');
+      }
 
-  Future<void> _refreshEvents() => _runBusy(
-        'Loading access events…',
-        () async {
-          final events = await _backend().events(_deviceId.text.trim());
-          setState(() {
-            _recentEvents = events;
-            _status = 'Loaded ${events.length} recent events.';
+      switch (result[0]) {
+        case 0x10:
+          HapticFeedback.mediumImpact();
+          _recentSuccessTimer?.cancel();
+          setState(() => _recentlyUnlockedDoorId = door.deviceId);
+          _recentSuccessTimer = Timer(const Duration(seconds: 5), () {
+            if (mounted) setState(() => _recentlyUnlockedDoorId = null);
           });
-        },
+          _showMessage(door.title + ' unlocked.', success: true);
+          break;
+        case 0x11:
+          throw const FormatException('You are not authorized for this door.');
+        case 0x12:
+          throw const FormatException('Your access is not valid at this time.');
+        case 0x16:
+          throw const FormatException('This door is waiting for its clock to sync.');
+        default:
+          throw const FormatException('Access was denied.');
+      }
+    } catch (error) {
+      _showMessage(
+        error.toString().replaceFirst('FormatException: ', ''),
+        error: true,
       );
-
-  Future<void> _chooseTime({required bool start}) async {
-    final selected = await showTimePicker(
-      context: context,
-      initialTime: start ? _startTime : _endTime,
-    );
-    if (selected != null) {
-      setState(() {
-        if (start) {
-          _startTime = selected;
-        } else {
-          _endTime = selected;
-        }
-      });
+    } finally {
+      await _disconnect(door.device);
+      if (mounted) setState(() => _busyDoorId = null);
+      unawaited(_scan());
     }
   }
 
-  String _formatTime(TimeOfDay value) =>
-      value.format(context);
+  Future<void> _showSetupDialog() async {
+    final codeController = TextEditingController();
+    final pinController = TextEditingController();
 
-  Widget _section(String title, List<Widget> children) => Card(
-        margin: const EdgeInsets.only(bottom: 14),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            4,
+            20,
+            MediaQuery.viewInsetsOf(context).bottom + 24,
+          ),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              Text(title, style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 14),
-              ...children,
+              Text(
+                'Set up access',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'This is only needed once when an administrator gives this phone access.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Colors.black54,
+                    ),
+              ),
+              const SizedBox(height: 18),
+              TextField(
+                controller: codeController,
+                minLines: 3,
+                maxLines: 6,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  labelText: 'Setup code',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: pinController,
+                keyboardType: TextInputType.number,
+                obscureText: true,
+                maxLength: 6,
+                decoration: const InputDecoration(
+                  labelText: 'Pairing PIN',
+                  border: OutlineInputBorder(),
+                  counterText: '',
+                ),
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: () async {
+                  Navigator.of(context).pop();
+                  await _provision(
+                    codeController.text.trim(),
+                    pinController.text.trim(),
+                  );
+                },
+                child: const Text('Add access to this phone'),
+              ),
             ],
           ),
+        );
+      },
+    );
+
+    codeController.dispose();
+    pinController.dispose();
+  }
+
+  Future<void> _provision(String rawCode, String pin) async {
+    if (_busyDoorId != null) return;
+
+    try {
+      final decoded = jsonDecode(rawCode);
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('The setup code is invalid.');
+      }
+
+      final deviceId = decoded['deviceId']?.toString() ?? '';
+      final userId = decoded['userId']?.toString() ?? '';
+      final keyHex = decoded['credentialKeyHex']?.toString() ?? '';
+      final schedule = decoded['schedule'];
+
+      if (deviceId.isEmpty ||
+          schedule is! Map<String, dynamic> ||
+          !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(keyHex) ||
+          !RegExp(r'^[0-9]{6}$').hasMatch(pin)) {
+        throw const FormatException('The setup details are incomplete.');
+      }
+      uuidToBytes(userId);
+
+      final door = _doors[deviceId];
+      if (door == null) {
+        throw FormatException(
+          'Bring the phone close to LOCK-' + deviceId + ', then refresh and try again.',
+        );
+      }
+
+      final credential = <String, Object?>{
+        'deviceId': deviceId,
+        'userId': userId,
+        'credentialKeyHex': keyHex,
+        'schedule': schedule,
+      };
+
+      await _secureStorage.write(
+        key: _credentialStorageKey(deviceId),
+        value: jsonEncode(credential),
+      );
+      _hasAccess[deviceId] = true;
+
+      setState(() => _busyDoorId = deviceId);
+
+      await _connect(door);
+      final session = await _beginSession(deviceId);
+      if (session.mode != 1) {
+        throw const FormatException(
+          'Restart the smart lock, then set up access within two minutes.',
+        );
+      }
+
+      final result = await _sendEncrypted(
+        session,
+        enrollmentPayload(
+          userId: userId,
+          credential: hexToBytes(keyHex),
+          daysMask: (schedule['daysMask'] as num).toInt(),
+          startMinute: (schedule['startMinute'] as num).toInt(),
+          endMinute: (schedule['endMinute'] as num).toInt(),
+          validFrom: (schedule['validFrom'] as num).toInt(),
+          validUntil: schedule['validUntil'] == null
+              ? 0
+              : (schedule['validUntil'] as num).toInt(),
+          pairingPin: pin,
         ),
       );
 
-  Widget _field(
-    TextEditingController controller,
-    String label, {
-    bool obscure = false,
-    TextInputType? keyboardType,
-  }) =>
-      Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: TextField(
-          controller: controller,
-          obscureText: obscure,
-          keyboardType: keyboardType,
-          autocorrect: false,
-          decoration: InputDecoration(labelText: label),
+      if (result.isEmpty || result[0] != 0x13) {
+        throw const FormatException('The smart lock rejected setup.');
+      }
+
+      HapticFeedback.mediumImpact();
+      _showMessage(
+        'Access added. You can now unlock ' + door.title + '.',
+        success: true,
+      );
+    } catch (error) {
+      _showMessage(
+        error.toString().replaceFirst('FormatException: ', ''),
+        error: true,
+      );
+    } finally {
+      final doorId = _busyDoorId;
+      final door = doorId == null ? null : _doors[doorId];
+      if (door != null) await _disconnect(door.device);
+      if (mounted) setState(() => _busyDoorId = null);
+      unawaited(_scan());
+    }
+  }
+
+  void _showMessage(
+    String message, {
+    bool error = false,
+    bool success = false,
+  }) {
+    if (!mounted) return;
+    final color = success
+        ? const Color(0xff166534)
+        : error
+            ? const Color(0xff991b1b)
+            : Colors.black87;
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: color,
+          behavior: SnackBarBehavior.floating,
         ),
       );
+  }
+
+  IconData _signalIcon(int rssi) {
+    if (rssi >= -60) return Icons.signal_cellular_alt;
+    if (rssi >= -75) return Icons.signal_cellular_alt_2_bar;
+    return Icons.signal_cellular_alt_1_bar;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final connected = _control != null && _messages != null;
+    final doors = _doors.values.toList()
+      ..sort((a, b) => b.rssi.compareTo(a.rssi));
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Smart Access'),
-        backgroundColor: Theme.of(context).colorScheme.surface,
+        title: GestureDetector(
+          onLongPress: _showSetupDialog,
+          child: const Text(
+            'Smart Access',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+        actions: <Widget>[
+          IconButton(
+            onPressed: _scanning || _busyDoorId != null ? null : _scan,
+            tooltip: 'Refresh nearby doors',
+            icon: _scanning
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh),
+          ),
+          const SizedBox(width: 6),
+        ],
       ),
-      body: SafeArea(
+      body: RefreshIndicator(
+        onRefresh: _scan,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
           children: <Widget>[
-            _section('Controller', <Widget>[
-              _field(_deviceId, 'Controller ID'),
-              _field(_deviceName, 'Controller name'),
-              Text(
-                _status,
-                style: Theme.of(context).textTheme.bodyMedium,
+            const Text(
+              'Nearby doors',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.8,
               ),
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                onPressed: _busy ? null : _registerDevice,
-                icon: const Icon(Icons.add_link),
-                label: const Text('Register controller'),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _scanning
+                  ? 'Looking for smart locks around you…'
+                  : doors.isEmpty
+                      ? 'No smart locks are nearby.'
+                      : doors.length.toString() +
+                          ' smart lock' +
+                          (doors.length == 1 ? '' : 's') +
+                          ' nearby',
+              style: const TextStyle(
+                fontSize: 14,
+                color: Colors.black54,
               ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _busy ? null : _scanAndConnect,
-                icon: Icon(connected ? Icons.bluetooth_connected : Icons.bluetooth_searching),
-                label: Text(connected ? 'Connected' : 'Scan and connect'),
-              ),
-            ]),
-            _section('Phone access', <Widget>[
-              Text(
-                _credentialUserId == null
-                    ? 'No phone credential loaded'
-                    : 'Credential: $_credentialUserId',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 10),
-              FilledButton.icon(
-                onPressed: _busy || !connected ? null : _unlock,
-                icon: const Icon(Icons.lock_open),
-                label: const Text('Biometric unlock'),
-              ),
-              const SizedBox(height: 10),
-              _field(
-                _pairingPin,
-                'Pairing PIN',
-                keyboardType: TextInputType.number,
-              ),
-              OutlinedButton.icon(
-                onPressed: _busy || !connected ? null : _enrollPhone,
-                icon: const Icon(Icons.phonelink_lock),
-                label: const Text('Enroll this phone'),
-              ),
-            ]),
-            _section('Backend and timetable', <Widget>[
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.cloud_done_outlined),
-                title: const Text('Backend API'),
-                subtitle: Text(apiBaseUrl),
-                dense: true,
-              ),
-              _field(
-                _adminToken,
-                'Administrator token',
-                obscure: true,
-              ),
-              _field(_userName, 'Person name'),
-              Text(
-                'Allowed weekdays (Africa/Lusaka)',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 4),
-              Wrap(
-                spacing: 4,
-                children: <Widget>[
-                  for (var day = 1; day <= 7; day++)
-                    FilterChip(
-                      label: Text(const <String>[
-                        'Mon',
-                        'Tue',
-                        'Wed',
-                        'Thu',
-                        'Fri',
-                        'Sat',
-                        'Sun',
-                      ][day - 1]),
-                      selected: _selectedDays.contains(day),
-                      onSelected: _busy
-                          ? null
-                          : (selected) => setState(() {
-                                if (selected) {
-                                  _selectedDays.add(day);
-                                } else {
-                                  _selectedDays.remove(day);
-                                }
-                              }),
-                    ),
-                ],
-              ),
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _busy ? null : () => _chooseTime(start: true),
-                      child: Text('From ${_formatTime(_startTime)}'),
+            ),
+            const SizedBox(height: 20),
+            if (doors.isEmpty)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 42,
+                  ),
+                  child: Column(
+                    children: <Widget>[
+                      const Icon(
+                        Icons.door_front_door_outlined,
+                        size: 44,
+                        color: Colors.black38,
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        _scanning ? 'Scanning nearby…' : 'No doors found',
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Move closer to a Smart Access door and pull down to refresh.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.black54),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              ...doors.map((door) {
+                final hasAccess = _hasAccess[door.deviceId] ?? false;
+                final busy = _busyDoorId == door.deviceId;
+                final justUnlocked = _recentlyUnlockedDoorId == door.deviceId;
+
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Card(
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(20),
+                      onTap: busy ? null : () => _unlock(door),
+                      child: Padding(
+                        padding: const EdgeInsets.all(18),
+                        child: Row(
+                          children: <Widget>[
+                            Container(
+                              width: 50,
+                              height: 50,
+                              decoration: BoxDecoration(
+                                color: justUnlocked
+                                    ? const Color(0xffdcfce7)
+                                    : const Color(0xfff1f1f1),
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Icon(
+                                justUnlocked
+                                    ? Icons.lock_open_rounded
+                                    : Icons.door_front_door_outlined,
+                                color: justUnlocked
+                                    ? const Color(0xff15803d)
+                                    : Colors.black87,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Text(
+                                    door.title,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 3),
+                                  Row(
+                                    children: <Widget>[
+                                      Icon(
+                                        _signalIcon(door.rssi),
+                                        size: 14,
+                                        color: Colors.black45,
+                                      ),
+                                      const SizedBox(width: 5),
+                                      Text(
+                                        hasAccess
+                                            ? 'Ready to unlock'
+                                            : 'No access assigned',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: hasAccess
+                                              ? const Color(0xff166534)
+                                              : Colors.black45,
+                                          fontWeight: hasAccess
+                                              ? FontWeight.w600
+                                              : FontWeight.w400,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (busy)
+                              const SizedBox.square(
+                                dimension: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            else
+                              Icon(
+                                hasAccess
+                                    ? Icons.fingerprint_rounded
+                                    : Icons.lock_outline_rounded,
+                                color: hasAccess
+                                    ? Colors.black87
+                                    : Colors.black26,
+                              ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _busy ? null : () => _chooseTime(start: false),
-                      child: Text('Until ${_formatTime(_endTime)}'),
-                    ),
-                  ),
-                ],
+                );
+              }),
+            const SizedBox(height: 10),
+            const Center(
+              child: Text(
+                'Tap a door to unlock with your fingerprint or face.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.black45,
+                ),
               ),
-              const SizedBox(height: 8),
-              FilledButton.icon(
-                onPressed: _busy ? null : _createCredential,
-                icon: const Icon(Icons.person_add_alt_1),
-                label: const Text('Create phone credential'),
-              ),
-              const SizedBox(height: 8),
-              _field(
-                _credentialImport,
-                'Or paste credential JSON from the admin dashboard',
-              ),
-              OutlinedButton.icon(
-                onPressed: _busy ? null : _importCredential,
-                icon: const Icon(Icons.download_done),
-                label: const Text('Import administrator credential'),
-              ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _busy ? null : _refreshEvents,
-                icon: const Icon(Icons.history),
-                label: const Text('Refresh audit events'),
-              ),
-            ]),
-            if (_recentEvents.isNotEmpty)
-              _section(
-                'Recent access events',
-                _recentEvents.take(10).map((event) {
-                  final kind = event['type']?.toString() ?? 'event';
-                  final user = event['userId']?.toString() ?? 'unknown user';
-                  final time = event['occurredAt']?.toString() ?? '';
-                  return ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    leading: const Icon(Icons.receipt_long),
-                    title: Text(kind.replaceAll('_', ' ')),
-                    subtitle: Text('$user · $time'),
-                  );
-                }).toList(),
-              ),
-            if (_busy) const LinearProgressIndicator(),
+            ),
           ],
         ),
       ),
