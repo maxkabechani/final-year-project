@@ -15,6 +15,15 @@ import { Input } from '@/components/ui/input'
 import { useAdminConfig } from '@/lib/config'
 
 export const Route = createFileRoute('/settings')({
+  head: () => ({
+    title: 'Settings | Smart Access',
+    meta: [
+      { name: 'description', content: 'Configure the Smart Access dashboard connection to the Fastify API.' },
+      { property: 'og:title', content: 'Settings | Smart Access' },
+      { property: 'og:description', content: 'Configure the Smart Access dashboard connection to the Fastify API.' },
+      { name: 'twitter:card', content: 'summary' },
+    ],
+  }),
   component: SettingsPage,
 })
 
