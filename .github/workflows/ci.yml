@@ -39,7 +39,7 @@ jobs:
           flutter test --no-pub
       - name: Build installable debug APK
         working-directory: mobile
-        run: flutter build apk --debug --no-pub
+        run: flutter build apk --debug --no-pub --dart-define=API_BASE_URL=https://api-project.maxkabechani.dev
       - uses: actions/upload-artifact@v4
         with:
           name: CL3-Access-APK
