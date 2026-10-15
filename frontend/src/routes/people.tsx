@@ -10,7 +10,18 @@ import type { Person } from '@/lib/api'
 import { useAdminConfig } from '@/lib/config'
 import { usePeople } from '@/lib/queries'
 
-export const Route = createFileRoute('/people')({ component: PeoplePage })
+export const Route = createFileRoute('/people')({
+  head: () => ({
+    title: 'People | Smart Access',
+    meta: [
+      { name: 'description', content: 'Manage the people who can be assigned access to one or more smart locks.' },
+      { property: 'og:title', content: 'People | Smart Access' },
+      { property: 'og:description', content: 'Manage the people who can be assigned access to one or more smart locks.' },
+      { name: 'twitter:card', content: 'summary' },
+    ],
+  }),
+  component: PeoplePage,
+})
 
 function PeoplePage() {
   const { configured } = useAdminConfig()
