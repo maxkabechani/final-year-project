@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { CheckCircle2, RotateCcw } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+import { ShieldPlus, UserRound } from 'lucide-react'
+import { useState, type FormEvent } from 'react'
+import { PageError } from '@/components/PageState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -12,15 +13,16 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { useAdminConfig } from '@/lib/config'
+import { authClient } from '@/lib/auth-client'
+import { useAdmins, useCreateAdmin } from '@/lib/queries'
 
 export const Route = createFileRoute('/settings')({
   head: () => ({
-    title: 'Settings | Smart Access',
+    title: 'Administrators | Smart Access',
     meta: [
-      { name: 'description', content: 'Configure the Smart Access dashboard connection to the Fastify API.' },
-      { property: 'og:title', content: 'Settings | Smart Access' },
-      { property: 'og:description', content: 'Configure the Smart Access dashboard connection to the Fastify API.' },
+      { name: 'description', content: 'Manage Smart Access dashboard administrators.' },
+      { property: 'og:title', content: 'Administrators | Smart Access' },
+      { property: 'og:description', content: 'Manage Smart Access dashboard administrators.' },
       { name: 'twitter:card', content: 'summary' },
     ],
   }),
@@ -28,93 +30,108 @@ export const Route = createFileRoute('/settings')({
 })
 
 function SettingsPage() {
-  const { config, configured, updateConfig, clearConfig } = useAdminConfig()
-  const [apiUrl, setApiUrl] = useState(config.apiUrl)
-  const [adminToken, setAdminToken] = useState(config.adminToken)
-  const [saved, setSaved] = useState(false)
+  const { data: session } = authClient.useSession()
+  const admins = useAdmins()
+  const createAdmin = useCreateAdmin()
+  const role = (session?.user as { role?: string } | undefined)?.role
+  const isOwner = role === 'owner'
 
-  useEffect(() => {
-    setApiUrl(config.apiUrl)
-    setAdminToken(config.adminToken)
-  }, [config])
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault()
-    updateConfig({ apiUrl, adminToken })
-    setSaved(true)
-    window.setTimeout(() => setSaved(false), 1800)
+    await createAdmin.mutateAsync({
+      name: name.trim(),
+      email: email.trim(),
+      password,
+    })
+    setName('')
+    setEmail('')
+    setPassword('')
   }
 
   return (
     <div className="flex min-w-0 max-w-full flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
       <PageHeader
-        eyebrow="Dashboard configuration"
-        title="API connection"
-        description="Connect the TanStack application to the separately deployed Fastify API."
+        eyebrow="Dashboard security"
+        title="Administrators"
+        description="Dashboard access is protected by Better Auth sessions. No shared administrator token is stored in the browser."
       />
 
-      <div className="w-full min-w-0 max-w-3xl px-4 lg:px-6">
+      <div className="grid min-w-0 max-w-full grid-cols-1 gap-4 px-4 lg:px-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <Card>
           <CardHeader>
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <CardTitle>Administrator connection</CardTitle>
-                <CardDescription className="mt-2">
-                  The token is stored in this browser for the supervised prototype and sent only
-                  to the configured API as a bearer credential.
-                </CardDescription>
-              </div>
-              <Badge variant={configured ? 'secondary' : 'outline'}>
-                {configured ? 'Configured' : 'Setup required'}
-              </Badge>
+            <CardTitle>Dashboard administrators</CardTitle>
+            <CardDescription>
+              Owner and administrator accounts that can manage locks, people and access policies.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {admins.error ? (
+              <PageError error={admins.error} />
+            ) : (
+              (admins.data ?? []).map((admin) => (
+                <div key={admin.id} className="flex items-center gap-3 rounded-lg border p-3">
+                  <div className="grid size-9 shrink-0 place-items-center rounded-full bg-muted">
+                    <UserRound className="size-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{admin.name}</div>
+                    <div className="truncate text-xs text-muted-foreground">{admin.email}</div>
+                  </div>
+                  <Badge variant={admin.role === 'owner' ? 'default' : 'outline'} className="capitalize">
+                    {admin.role}
+                  </Badge>
+                </div>
+              ))
+            )}
+            {!admins.isLoading && !admins.error && (admins.data?.length ?? 0) === 0 && (
+              <p className="text-sm text-muted-foreground">No administrators found.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="h-fit">
+          <CardHeader>
+            <div className="mb-2 grid size-9 place-items-center rounded-lg bg-muted">
+              <ShieldPlus className="size-4" />
             </div>
+            <CardTitle>{isOwner ? 'Add administrator' : 'Administrator account'}</CardTitle>
+            <CardDescription>
+              {isOwner
+                ? 'Create another administrator who can register doors and grant or revoke access.'
+                : 'Only the owner can create additional dashboard administrators.'}
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <form className="space-y-5" onSubmit={submit}>
-              <div className="grid gap-2">
-                <label htmlFor="api-url" className="text-sm font-medium">Fastify API URL</label>
-                <Input
-                  id="api-url"
-                  type="url"
-                  required
-                  value={apiUrl}
-                  onChange={(event) => setApiUrl(event.target.value)}
-                  placeholder="https://api-project.maxkabechani.dev"
-                  autoComplete="url"
-                />
-                <p className="text-xs text-muted-foreground">Use the API origin only; do not append /api.</p>
-              </div>
-
-              <div className="grid gap-2">
-                <label htmlFor="admin-token" className="text-sm font-medium">Administrator token</label>
-                <Input
-                  id="admin-token"
-                  type="password"
-                  required
-                  minLength={24}
-                  value={adminToken}
-                  onChange={(event) => setAdminToken(event.target.value)}
-                  placeholder="At least 24 characters"
-                  autoComplete="off"
-                />
-                <p className="text-xs text-muted-foreground">
-                  If authentication fails, verify that this matches ADMIN_TOKEN on the Fastify deployment.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <Button type="submit">
-                  <CheckCircle2 />
-                  {saved ? 'Connection saved' : 'Save connection'}
+            {isOwner ? (
+              <form className="space-y-4" onSubmit={submit}>
+                <div className="grid gap-2">
+                  <label htmlFor="new-admin-name" className="text-sm font-medium">Full name</label>
+                  <Input id="new-admin-name" value={name} onChange={(event) => setName(event.target.value)} required minLength={2} />
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="new-admin-email" className="text-sm font-medium">Email</label>
+                  <Input id="new-admin-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="new-admin-password" className="text-sm font-medium">Temporary password</label>
+                  <Input id="new-admin-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} />
+                </div>
+                <Button type="submit" disabled={createAdmin.isPending}>
+                  <ShieldPlus />
+                  {createAdmin.isPending ? 'Adding…' : 'Add administrator'}
                 </Button>
-                {configured && (
-                  <Button type="button" variant="outline" onClick={clearConfig}>
-                    <RotateCcw />
-                    Clear saved connection
-                  </Button>
-                )}
+                {createAdmin.error && <PageError error={createAdmin.error} />}
+              </form>
+            ) : (
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+                <div className="font-medium">{session?.user.name}</div>
+                <div className="text-muted-foreground">{session?.user.email}</div>
               </div>
-            </form>
+            )}
           </CardContent>
         </Card>
       </div>
