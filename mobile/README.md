@@ -28,3 +28,20 @@ Hold the controller's exit button for five seconds. It still unlocks the door fo
 ## Verification
 
 flutter analyze and flutter test are run in GitHub Actions. BLE and biometric operation still requires a physical Android phone and the ESP32 controller; the CI build cannot verify hardware behavior.
+
+
+## Backend API
+
+The Android app now defaults to:
+
+`https://api-project.maxkabechani.dev`
+
+The value is compiled into the APK through `API_BASE_URL`:
+
+```bash
+flutter build apk --debug --dart-define=API_BASE_URL=https://api-project.maxkabechani.dev
+```
+
+The source also contains this URL as the fallback value, so local debug builds use the deployed API even when the define is omitted.
+
+The API URL is no longer typed manually in the app. Administrator-only API actions still require the administrator bearer token. Imported phone credentials and offline BLE unlock do not depend on the admin token.
