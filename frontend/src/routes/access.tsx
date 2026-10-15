@@ -172,14 +172,14 @@ function AccessPage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
+    <div className="flex min-w-0 max-w-full flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
       <PageHeader
         eyebrow="Authorization policy"
         title="Grant access"
         description="Select a registered person, choose the door they can open, then set recurring days or a one-off time window."
       />
 
-      <div className="grid gap-4 px-4 xl:grid-cols-[1fr_340px] lg:px-6">
+      <div className="grid min-w-0 max-w-full grid-cols-1 gap-4 px-4 lg:px-6 xl:grid-cols-[minmax(0,1fr)_21.25rem]">
         <Card>
           <CardHeader>
             <CardTitle>Access assignment</CardTitle>
