@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { useAdminConfig } from '@/lib/config'
+import { authClient } from '@/lib/auth-client'
 import { cn } from '@/lib/utils'
 
 const mainNav = [
@@ -39,6 +40,7 @@ export function AppSidebar({
 }: AppSidebarProps) {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const { configured } = useAdminConfig()
+  const { data: session } = authClient.useSession()
 
   return (
     <>
@@ -170,14 +172,14 @@ export function AppSidebar({
             />
             <div className={cn('min-w-0 flex-1', collapsed && 'md:hidden')}>
               <div className="truncate text-xs font-medium">
-                {!configured ? 'Setup required' : liveConnected ? 'Live connection' : 'API configured'}
+                {!configured ? 'API unavailable' : liveConnected ? 'Live connection' : 'Signed in'}
               </div>
               <div className="truncate text-[11px] text-muted-foreground">
                 {!configured
-                  ? 'Add API credentials'
+                  ? 'Deployment configuration missing'
                   : liveConnected
                     ? 'WebSocket updates active'
-                    : 'Waiting for live updates'}
+                    : session?.user.email ?? 'Administrator session active'}
               </div>
             </div>
             {!collapsed && configured && liveConnected && (
