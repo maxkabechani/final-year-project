@@ -12,19 +12,24 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+const apiBaseUrl = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'https://api-project.maxkabechani.dev',
+);
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const Cl3AccessApp());
+  runApp(const SmartAccessApp());
 }
 
-class Cl3AccessApp extends StatelessWidget {
-  const Cl3AccessApp({super.key});
+class SmartAccessApp extends StatelessWidget {
+  const SmartAccessApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     const navy = Color(0xff1d285f);
     return MaterialApp(
-      title: 'CL3 Access',
+      title: 'Smart Access',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -54,10 +59,10 @@ class _AccessHomePageState extends State<AccessHomePage> {
   static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
   static final LocalAuthentication _localAuth = LocalAuthentication();
 
-  final _apiUrl = TextEditingController();
+  final _apiUrl = TextEditingController(text: apiBaseUrl);
   final _adminToken = TextEditingController();
-  final _deviceId = TextEditingController(text: 'cl3-door-01');
-  final _deviceName = TextEditingController(text: 'CL3 Laboratory Door');
+  final _deviceId = TextEditingController(text: 'front-door-01');
+  final _deviceName = TextEditingController(text: 'Front Door');
   final _userName = TextEditingController(text: 'Student');
   final _pairingPin = TextEditingController();
   final _credentialImport = TextEditingController();
@@ -138,7 +143,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
           _deviceId.text = deviceId;
           await Clipboard.setData(ClipboardData(text: token));
           _setStatus(
-            'Controller registered. Device token copied; add it to firmware/include/cl3_local_config.h.',
+            'Controller registered. Device token copied; add it to firmware/include/smart_lock_local_config.h.',
           );
         },
       );
@@ -186,7 +191,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
       );
 
   String _credentialStorageKey(String deviceId) =>
-      'cl3.credential.$deviceId';
+      'smart-access.credential.$deviceId';
 
   Future<Map<String, dynamic>> _loadCredential() async {
     final deviceId = _deviceId.text.trim();
@@ -269,13 +274,13 @@ class _AccessHomePageState extends State<AccessHomePage> {
   }
 
   Future<void> _scanAndConnect() => _runBusy(
-        'Scanning for the CL3 controller…',
+        'Scanning for the smart lock…',
         () async {
           await _requestBlePermissions();
           if (!await FlutterBluePlus.isSupported) {
             throw const FormatException('Bluetooth LE is not supported here.');
           }
-          final targetName = 'CL3-${_deviceId.text.trim()}';
+          final targetName = 'LOCK-${_deviceId.text.trim()}';
           final found = Completer<ScanResult>();
           await _scanSubscription?.cancel();
           _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
@@ -613,7 +618,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
               const SizedBox(height: 10),
               _field(
                 _pairingPin,
-                'Pairing PIN shown on controller LCD',
+                'Pairing PIN',
                 keyboardType: TextInputType.number,
               ),
               OutlinedButton.icon(
@@ -623,17 +628,19 @@ class _AccessHomePageState extends State<AccessHomePage> {
               ),
             ]),
             _section('Backend and timetable', <Widget>[
-              _field(
-                _apiUrl,
-                'Backend URL (HTTPS recommended)',
-                keyboardType: TextInputType.url,
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.cloud_done_outlined),
+                title: const Text('Backend API'),
+                subtitle: Text(apiBaseUrl),
+                dense: true,
               ),
               _field(
                 _adminToken,
                 'Administrator token',
                 obscure: true,
               ),
-              _field(_userName, 'Student name'),
+              _field(_userName, 'Person name'),
               Text(
                 'Allowed weekdays (Africa/Lusaka)',
                 style: Theme.of(context).textTheme.bodyMedium,
