@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: cl3
       POSTGRES_USER: cl3
-      POSTGRES_PASSWORD: change-this-local-password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - cl3-postgres:/var/lib/postgresql/data
     healthcheck:
@@ -18,16 +18,16 @@ services:
     build:
       context: ./backend
     restart: unless-stopped
-    env_file:
-      - ./backend/.env
     environment:
-      DATABASE_URL: postgres://cl3:change-this-local-password@db:5432/cl3
       PORT: 8080
+      DATABASE_URL: postgres://cl3:${POSTGRES_PASSWORD}@db:5432/cl3
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      CREDENTIAL_MASTER_KEY: ${CREDENTIAL_MASTER_KEY}
     depends_on:
       db:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "8080"
 
 volumes:
   cl3-postgres:
