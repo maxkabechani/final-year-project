@@ -6,6 +6,7 @@ import {
   type AccessGrant,
   type AccessSchedule,
   type AccessUser,
+  type DashboardAdmin,
   type Device,
   type Person,
 } from './api'
@@ -187,5 +188,32 @@ export function useRevokeUser(deviceId: string) {
         { method: 'DELETE' },
       ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  })
+}
+
+
+export function useAdmins() {
+  const { config, configured } = useAdminConfig()
+  return useQuery({
+    queryKey: ['admins', config.apiUrl],
+    enabled: configured,
+    queryFn: () => apiRequest<{ admins: DashboardAdmin[] }>(config, '/api/admins'),
+    select: (result) => result.admins,
+  })
+}
+
+export function useCreateAdmin() {
+  const { config } = useAdminConfig()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { name: string; email: string; password: string }) =>
+      apiRequest<{ admin: DashboardAdmin }>(config, '/api/admins', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admins'] })
+      toast.success('Administrator added')
+    },
   })
 }
