@@ -1,26 +1,17 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
-function SidebarProvider({
-  className,
-  ...props
-}: React.ComponentProps<'div'>) {
+function SidebarProvider({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
       data-slot="sidebar-wrapper"
-      className={cn(
-        'group/sidebar-wrapper flex min-h-svh w-full min-w-0 bg-sidebar',
-        className,
-      )}
+      className={cn('group/sidebar-wrapper flex min-h-svh w-full min-w-0 bg-sidebar', className)}
       {...props}
     />
   )
 }
 
-function SidebarInset({
-  className,
-  ...props
-}: React.ComponentProps<'main'>) {
+function SidebarInset({ className, ...props }: React.ComponentProps<'main'>) {
   return (
     <main
       data-slot="sidebar-inset"
