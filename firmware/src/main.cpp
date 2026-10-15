@@ -1,13 +1,10 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
-#include <LiquidCrystal_I2C.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
-#include <RTClib.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include <Wire.h>
 #include <esp_system.h>
 #include <mbedtls/ecdh.h>
 #include <mbedtls/ecp.h>
@@ -16,8 +13,8 @@
 #include <time.h>
 #include <vector>
 
-#if __has_include("../include/cl3_local_config.h")
-#include "../include/cl3_local_config.h"
+#if __has_include("../include/smart_lock_local_config.h")
+#include "../include/smart_lock_local_config.h"
 #endif
 #include "../include/config.example.h"
 
@@ -52,15 +49,10 @@ struct __attribute__((packed)) EventRecord {
 enum EventType : uint8_t {
   EVENT_GRANTED = 1,
   EVENT_DENIED = 2,
-  EVENT_EXIT = 3,
-  EVENT_DOOR_OPEN = 4,
-  EVENT_DOOR_CLOSED = 5,
-  EVENT_ENROLLED = 6
+  EVENT_ENROLLED = 3
 };
 
 Preferences preferences;
-RTC_DS3231 rtc;
-LiquidCrystal_I2C lcd(CL3_LCD_ADDRESS, 16, 2);
 NimBLECharacteristic *messageCharacteristic = nullptr;
 std::vector<UserRecord> users;
 std::vector<EventRecord> events;
@@ -82,8 +74,9 @@ bool sessionActive = false;
 bool sessionConsumed = false;
 bool sessionCryptoInitialized = false;
 
-bool rtcFound = false;
-bool rtcValid = false;
+bool clockValid = false;
+uint32_t clockEpoch = 0;
+uint32_t clockAtMillis = 0;
 bool pairingActive = false;
 char pairingPin[7] = "000000";
 uint32_t pairingExpiresAt = 0;
@@ -92,11 +85,6 @@ bool lockoutActive = false;
 uint32_t lockoutExpiresAt = 0;
 uint32_t unlockUntil = 0;
 uint32_t lastSyncAt = 0;
-bool previousDoorOpen = false;
-bool doorStateInitialized = false;
-bool exitWasDown = false;
-bool pairingTriggeredThisPress = false;
-uint32_t exitDownAt = 0;
 
 static int secureRandom(void *, unsigned char *output, size_t length) {
   esp_fill_random(output, length);
@@ -148,9 +136,9 @@ static void appendAscii(std::vector<uint8_t> &out, const char *value) {
 }
 
 static void appendDeviceId(std::vector<uint8_t> &out) {
-  const size_t length = strlen(CL3_DEVICE_ID);
+  const size_t length = strlen(SMART_LOCK_DEVICE_ID);
   out.push_back(static_cast<uint8_t>(length));
-  out.insert(out.end(), CL3_DEVICE_ID, CL3_DEVICE_ID + length);
+  out.insert(out.end(), SMART_LOCK_DEVICE_ID, SMART_LOCK_DEVICE_ID + length);
 }
 
 static std::vector<uint8_t> baseAad() {
@@ -240,11 +228,26 @@ static const char *eventTypeName(uint8_t type) {
   switch (type) {
     case EVENT_GRANTED: return "granted";
     case EVENT_DENIED: return "denied";
-    case EVENT_EXIT: return "exit";
-    case EVENT_DOOR_OPEN: return "door_open";
-    case EVENT_DOOR_CLOSED: return "door_closed";
     case EVENT_ENROLLED: return "enrolled";
     default: return "denied";
+  }
+}
+
+static uint32_t nowUnix() {
+  if (!clockValid) return 0;
+  return clockEpoch + static_cast<uint32_t>((millis() - clockAtMillis) / 1000U);
+}
+
+static void setSoftwareClock(uint32_t unixSeconds, bool persist = true) {
+  if (unixSeconds < 1700000000U) return;
+  clockEpoch = unixSeconds;
+  clockAtMillis = millis();
+  clockValid = true;
+  if (persist) {
+    const uint32_t saved = preferences.getUInt("clock", 0U);
+    if (saved == 0U || unixSeconds > saved + 300U) {
+      preferences.putUInt("clock", unixSeconds);
+    }
   }
 }
 
@@ -259,7 +262,7 @@ static void saveEvents() {
 static void appendEvent(uint8_t type, const uint8_t *userId, const char *detail) {
   EventRecord event = {};
   makeEventId(event.eventId);
-  event.timestamp = rtcFound ? rtc.now().unixtime() : 0;
+  event.timestamp = nowUnix();
   event.type = type;
   if (userId != nullptr) memcpy(event.userId, userId, 16);
   if (detail != nullptr) strlcpy(event.detail, detail, sizeof(event.detail));
@@ -297,50 +300,41 @@ static bool saveUsers(const std::vector<UserRecord> &records) {
 }
 
 static void setRgb(bool red, bool green, bool blue) {
-  digitalWrite(CL3_PIN_LED_RED, red ? HIGH : LOW);
-  digitalWrite(CL3_PIN_LED_GREEN, green ? HIGH : LOW);
-  digitalWrite(CL3_PIN_LED_BLUE, blue ? HIGH : LOW);
+  digitalWrite(SMART_LOCK_PIN_LED_RED, red ? HIGH : LOW);
+  digitalWrite(SMART_LOCK_PIN_LED_GREEN, green ? HIGH : LOW);
+  digitalWrite(SMART_LOCK_PIN_LED_BLUE, blue ? HIGH : LOW);
 }
 
 static void showMessage(const char *line1, const char *line2) {
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print(line1);
-  lcd.setCursor(0, 1);
-  lcd.print(line2);
+  Serial.printf("%s | %s\n", line1, line2);
 }
 
 static void beep(uint16_t durationMs = 65) {
-  digitalWrite(CL3_PIN_BUZZER, HIGH);
+  digitalWrite(SMART_LOCK_PIN_BUZZER, HIGH);
   delay(durationMs);
-  digitalWrite(CL3_PIN_BUZZER, LOW);
+  digitalWrite(SMART_LOCK_PIN_BUZZER, LOW);
 }
 
-static void unlockDoor(bool exitRequest, const uint8_t *userId = nullptr) {
-  digitalWrite(CL3_PIN_RELAY, LOW);
+static void unlockDoor(const uint8_t *userId) {
+  digitalWrite(SMART_LOCK_PIN_RELAY, LOW);
   unlockUntil = millis() + kUnlockMs;
   setRgb(false, true, false);
   beep();
-  if (exitRequest) {
-    appendEvent(EVENT_EXIT, nullptr, "inside exit button");
-    showMessage("Exit requested", "Door unlocked");
-  } else {
-    appendEvent(EVENT_GRANTED, userId, "access granted");
-    showMessage("Access granted", "Door unlocked");
-  }
+  appendEvent(EVENT_GRANTED, userId, "access granted");
+  showMessage("Access granted", "Door unlocked");
 }
 
 static void denyDoor(uint8_t resultCode, const uint8_t *userId, const char *detail) {
   setRgb(true, false, false);
   beep(220);
   appendEvent(EVENT_DENIED, userId, detail);
-  if (resultCode == 0x16) showMessage("Access denied", "RTC not valid");
+  if (resultCode == 0x16) showMessage("Access denied", "Clock not synchronized");
   else if (resultCode == 0x12) showMessage("Access denied", "Outside schedule");
   else showMessage("Access denied", "Not authorized");
 }
 
 static bool scheduleAllows(const UserRecord &user, uint32_t utcSeconds) {
-  if (!rtcValid || utcSeconds < user.validFrom ||
+  if (!clockValid || utcSeconds < user.validFrom ||
       (user.validUntil != 0 && utcSeconds >= user.validUntil)) return false;
   const time_t localSeconds = static_cast<time_t>(utcSeconds) + 2 * 60 * 60;
   struct tm localTime;
@@ -550,9 +544,8 @@ static void handleEnrollment(const std::vector<uint8_t> &payload) {
     sendEncryptedResult(0x14);
     return;
   }
-  if (!rtcValid && incoming.validFrom >= 1700000000U) {
-    rtc.adjust(DateTime(incoming.validFrom));
-    rtcValid = true;
+  if (!clockValid && incoming.validFrom >= 1700000000U) {
+    setSoftwareClock(incoming.validFrom);
   }
   pairingActive = false;
   appendEvent(EVENT_ENROLLED, incoming.userId, "phone credential enrolled");
@@ -587,8 +580,8 @@ static void handleUnlock(const std::vector<uint8_t> &payload) {
     sendEncryptedResult(0x11);
     return;
   }
-  const uint32_t now = rtcFound ? rtc.now().unixtime() : 0;
-  if (!rtcValid) {
+  const uint32_t now = nowUnix();
+  if (!clockValid) {
     denyDoor(0x16, userId, "RTC invalid");
     sendEncryptedResult(0x16);
     return;
@@ -598,7 +591,7 @@ static void handleUnlock(const std::vector<uint8_t> &payload) {
     sendEncryptedResult(0x12);
     return;
   }
-  unlockDoor(false, userId);
+  unlockDoor(userId);
   sendEncryptedResult(0x10);
 }
 
@@ -637,7 +630,7 @@ class ControlCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 static void setupBle() {
-  String advertisedName = "CL3-" + String(CL3_DEVICE_ID);
+  String advertisedName = "LOCK-" + String(SMART_LOCK_DEVICE_ID);
   if (advertisedName.length() > 24) advertisedName.remove(24);
   NimBLEDevice::init(advertisedName.c_str());
   NimBLEDevice::setMTU(247);
@@ -655,24 +648,24 @@ static void setupBle() {
 }
 
 static String backendRoot(const char *path) {
-  String root = CL3_BACKEND_URL;
+  String root = SMART_LOCK_BACKEND_URL;
   while (root.endsWith("/")) root.remove(root.length() - 1);
   return root + path;
 }
 
 static bool backendReady() {
-  return strlen(CL3_BACKEND_URL) > 8 &&
-         strlen(CL3_DEVICE_TOKEN) > 16 &&
-         strlen(CL3_BACKEND_ROOT_CA) > 100 &&
+  return strlen(SMART_LOCK_BACKEND_URL) > 8 &&
+         strlen(SMART_LOCK_DEVICE_TOKEN) > 16 &&
+         strlen(SMART_LOCK_BACKEND_ROOT_CA) > 100 &&
          WiFi.status() == WL_CONNECTED;
 }
 
 static bool secureGet(const String &url, String &body) {
   WiFiClientSecure client;
-  client.setCACert(CL3_BACKEND_ROOT_CA);
+  client.setCACert(SMART_LOCK_BACKEND_ROOT_CA);
   HTTPClient http;
   if (!http.begin(client, url)) return false;
-  http.addHeader("Authorization", "Bearer " + String(CL3_DEVICE_TOKEN));
+  http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
   const int status = http.GET();
   if (status >= 200 && status < 300) body = http.getString();
   http.end();
@@ -681,10 +674,10 @@ static bool secureGet(const String &url, String &body) {
 
 static bool securePost(const String &url, const String &body) {
   WiFiClientSecure client;
-  client.setCACert(CL3_BACKEND_ROOT_CA);
+  client.setCACert(SMART_LOCK_BACKEND_ROOT_CA);
   HTTPClient http;
   if (!http.begin(client, url)) return false;
-  http.addHeader("Authorization", "Bearer " + String(CL3_DEVICE_TOKEN));
+  http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
   http.addHeader("Content-Type", "application/json");
   const int status = http.POST(body);
   http.end();
@@ -693,20 +686,19 @@ static bool securePost(const String &url, const String &body) {
 
 static bool syncClock() {
   String body;
-  const String path = "/api/devices/" + String(CL3_DEVICE_ID) + "/time";
+  const String path = "/api/devices/" + String(SMART_LOCK_DEVICE_ID) + "/time";
   if (!secureGet(backendRoot(path.c_str()), body)) return false;
   JsonDocument document;
   if (deserializeJson(document, body) != DeserializationError::Ok) return false;
   const uint32_t unixSeconds = document["unixSeconds"] | 0U;
   if (unixSeconds < 1700000000U) return false;
-  rtc.adjust(DateTime(unixSeconds));
-  rtcValid = true;
+  setSoftwareClock(unixSeconds);
   return true;
 }
 
 static bool syncUsers() {
   String body;
-  const String path = "/api/devices/" + String(CL3_DEVICE_ID) + "/sync";
+  const String path = "/api/devices/" + String(SMART_LOCK_DEVICE_ID) + "/sync";
   if (!secureGet(backendRoot(path.c_str()), body)) return false;
   JsonDocument document;
   if (deserializeJson(document, body) != DeserializationError::Ok) return false;
@@ -767,7 +759,7 @@ static bool syncEvents() {
   }
   String body;
   serializeJson(document, body);
-  const String path = "/api/devices/" + String(CL3_DEVICE_ID) + "/events";
+  const String path = "/api/devices/" + String(SMART_LOCK_DEVICE_ID) + "/events";
   if (!securePost(backendRoot(path.c_str()), body)) return false;
   events.clear();
   saveEvents();
@@ -787,90 +779,49 @@ static void syncBackend() {
 
 static void startPairingWindow() {
   if (lockoutActive) return;
-  esp_fill_random(pairingPin, 6);
-  for (uint8_t i = 0; i < 6; ++i) pairingPin[i] = '0' + (pairingPin[i] % 10);
-  pairingPin[6] = '\0';
+  if (strlen(SMART_LOCK_PAIRING_PIN) != 6) {
+    Serial.println("SMART_LOCK_PAIRING_PIN must contain exactly six digits.");
+    return;
+  }
+  strlcpy(pairingPin, SMART_LOCK_PAIRING_PIN, sizeof(pairingPin));
   pairingActive = true;
   pairingFailures = 0;
   pairingExpiresAt = millis() + kPairWindowMs;
-  char firstLine[17];
-  snprintf(firstLine, sizeof(firstLine), "Pair PIN %s", pairingPin);
-  showMessage(firstLine, "Valid for 120 sec");
+  Serial.printf("Pairing enabled for 120 seconds. PIN: %s\n", pairingPin);
   setRgb(false, false, true);
   beep(120);
 }
 
-static void handleExitButton() {
-  const bool isDown = digitalRead(CL3_PIN_EXIT) == LOW;
-  if (isDown && !exitWasDown) {
-    exitDownAt = millis();
-    pairingTriggeredThisPress = false;
-    unlockDoor(true);
-  }
-  if (isDown && !pairingTriggeredThisPress &&
-      static_cast<uint32_t>(millis() - exitDownAt) >= 5000) {
-    pairingTriggeredThisPress = true;
-    startPairingWindow();
-  }
-  if (!isDown && exitWasDown) {
-    pairingTriggeredThisPress = false;
-  }
-  exitWasDown = isDown;
-}
-
-static void handleDoorContact() {
-  const bool doorOpen = digitalRead(CL3_PIN_DOOR) == HIGH;
-  if (!doorStateInitialized) {
-    previousDoorOpen = doorOpen;
-    doorStateInitialized = true;
-    return;
-  }
-  if (doorOpen != previousDoorOpen) {
-    previousDoorOpen = doorOpen;
-    appendEvent(doorOpen ? EVENT_DOOR_OPEN : EVENT_DOOR_CLOSED,
-                nullptr, doorOpen ? "door contact opened" : "door contact closed");
-  }
-}
-
 void setup() {
   Serial.begin(115200);
-  pinMode(CL3_PIN_RELAY, OUTPUT);
-  digitalWrite(CL3_PIN_RELAY, HIGH);
-  pinMode(CL3_PIN_DOOR, INPUT_PULLUP);
-  pinMode(CL3_PIN_EXIT, INPUT_PULLUP);
-  pinMode(CL3_PIN_BUZZER, OUTPUT);
-  digitalWrite(CL3_PIN_BUZZER, LOW);
-  pinMode(CL3_PIN_LED_RED, OUTPUT);
-  pinMode(CL3_PIN_LED_GREEN, OUTPUT);
-  pinMode(CL3_PIN_LED_BLUE, OUTPUT);
+  pinMode(SMART_LOCK_PIN_RELAY, OUTPUT);
+  digitalWrite(SMART_LOCK_PIN_RELAY, HIGH);
+  pinMode(SMART_LOCK_PIN_BUZZER, OUTPUT);
+  digitalWrite(SMART_LOCK_PIN_BUZZER, LOW);
+  pinMode(SMART_LOCK_PIN_LED_RED, OUTPUT);
+  pinMode(SMART_LOCK_PIN_LED_GREEN, OUTPUT);
+  pinMode(SMART_LOCK_PIN_LED_BLUE, OUTPUT);
   setRgb(false, false, true);
 
-  Wire.begin(CL3_PIN_I2C_SDA, CL3_PIN_I2C_SCL);
-  lcd.init();
-  lcd.backlight();
-  showMessage("CL3 Smart Door", "Starting...");
-
-  preferences.begin("cl3-access", false);
+  preferences.begin("smart-lock", false);
   loadStoredData();
-  rtcFound = rtc.begin();
-  if (rtcFound) {
-    rtcValid = !rtc.lostPower();
-    if (!rtcValid) {
-      rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-      Serial.println("RTC was reset; waiting for authenticated server time.");
-    }
+  const uint32_t savedClock = preferences.getUInt("clock", 0U);
+  if (savedClock >= 1700000000U) {
+    setSoftwareClock(savedClock, false);
+    Serial.println("Restored last synchronized software clock.");
   }
 
-  if (strlen(CL3_WIFI_SSID) > 0) {
+  if (strlen(SMART_LOCK_WIFI_SSID) > 0) {
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
-    WiFi.begin(CL3_WIFI_SSID, CL3_WIFI_PASSWORD);
+    WiFi.begin(SMART_LOCK_WIFI_SSID, SMART_LOCK_WIFI_PASSWORD);
   }
 
   setupBle();
-  showMessage("BLE ready", rtcValid ? "Offline access ready" : "Waiting for time");
-  Serial.printf("Controller %s ready with %u users.\n",
-                CL3_DEVICE_ID, static_cast<unsigned>(users.size()));
+  startPairingWindow();
+  showMessage("Smart lock ready", clockValid ? "Offline access ready" : "Waiting for time sync");
+  Serial.printf("Controller %s ready with %u authorized users.\n",
+                SMART_LOCK_DEVICE_ID, static_cast<unsigned>(users.size()));
   if (WiFi.status() == WL_CONNECTED) syncBackend();
 }
 
@@ -889,18 +840,16 @@ void loop() {
     else if (localMessage[0] == 0x03) processEncryptedMessage(localMessage, localLength);
   }
 
-  handleExitButton();
-  handleDoorContact();
   if (unlockUntil != 0 && static_cast<int32_t>(millis() - unlockUntil) >= 0) {
-    digitalWrite(CL3_PIN_RELAY, HIGH);
+    digitalWrite(SMART_LOCK_PIN_RELAY, HIGH);
     unlockUntil = 0;
     setRgb(false, false, true);
-    showMessage("CL3 Smart Door", rtcValid ? "Ready" : "Clock not set");
+    showMessage("Smart lock", clockValid ? "Ready" : "Waiting for time sync");
   }
   if (pairingActive && static_cast<int32_t>(millis() - pairingExpiresAt) >= 0) {
     pairingActive = false;
     pairingPin[0] = '\0';
-    showMessage("Pairing ended", "Access still local");
+    showMessage("Pairing ended", "BLE access ready");
   }
   if (lockoutActive && static_cast<int32_t>(millis() - lockoutExpiresAt) >= 0) {
     lockoutActive = false;
