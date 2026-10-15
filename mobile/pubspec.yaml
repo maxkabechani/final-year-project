@@ -1,5 +1,5 @@
 name: smart_access
-description: Offline-first BLE app for managing and unlocking Smart Access controllers.
+description: Simple biometric BLE door access app for Smart Access.
 publish_to: none
 version: 0.1.0+1
 
@@ -13,7 +13,6 @@ dependencies:
   device_info_plus: ^13.3.0
   flutter_blue_plus: ^2.3.14
   flutter_secure_storage: ^11.2.0
-  http: ^1.5.0
   local_auth: ^3.0.2
   permission_handler: ^12.0.1
   pointycastle: ^4.0.0
