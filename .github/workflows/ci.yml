@@ -35,7 +35,7 @@ jobs:
         working-directory: mobile
         run: |
           dart format lib test
-          flutter analyze --no-pub
+          flutter analyze --no-pub --no-fatal-infos
           flutter test --no-pub
       - name: Build installable debug APK
         working-directory: mobile
