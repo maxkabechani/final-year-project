@@ -9,6 +9,7 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TanStackRouterDevtools } from '@tanstack/react-router-devtools'
 import { AppShell } from '@/components/AppShell'
+import { AuthGate } from '@/components/AuthGate'
 import { Toaster } from '@/components/ui/sonner'
 import { ConfigProvider } from '@/lib/config'
 import appCss from '@/styles.css?url'
@@ -59,9 +60,11 @@ function RootComponent() {
     <RootDocument>
       <QueryClientProvider client={queryClient}>
         <ConfigProvider>
-          <AppShell>
-            <Outlet />
-          </AppShell>
+          <AuthGate>
+            <AppShell>
+              <Outlet />
+            </AppShell>
+          </AuthGate>
           <Toaster />
         </ConfigProvider>
         {import.meta.env.DEV && <TanStackRouterDevtools position="bottom-right" />}
