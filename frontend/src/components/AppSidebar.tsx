@@ -147,7 +147,7 @@ export function AppSidebar({
           <Link
             to="/settings"
             onClick={onMobileClose}
-            title={collapsed ? 'Settings' : undefined}
+            title={collapsed ? 'Administrators' : undefined}
             className={cn(
               'flex h-9 items-center gap-2 rounded-md px-2 text-sm font-medium transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
               pathname.startsWith('/settings') && 'bg-sidebar-accent text-sidebar-accent-foreground',
@@ -155,7 +155,7 @@ export function AppSidebar({
             )}
           >
             <Settings2 className="size-4" />
-            <span className={cn(collapsed && 'md:hidden')}>Settings</span>
+            <span className={cn(collapsed && 'md:hidden')}>Administrators</span>
           </Link>
 
           <div
