@@ -507,6 +507,40 @@ app.delete<{ Params: { deviceId: string; userId: string } }>(
   },
 );
 
+app.get('/api/events', { preHandler: requireAdmin }, async (request) => {
+  const query = z.object({
+    deviceId: deviceIdSchema.optional(),
+  }).parse(request.query);
+
+  const values: unknown[] = [];
+  let where = '';
+  if (query.deviceId) {
+    values.push(query.deviceId);
+    where = 'WHERE e.device_id = $1';
+  }
+
+  const result = await pool.query(
+    `SELECT
+       e.event_id AS "eventId",
+       e.device_id AS "deviceId",
+       d.name AS "deviceName",
+       d.location,
+       e.occurred_at AS "occurredAt",
+       e.event_type AS type,
+       e.user_id AS "userId",
+       p.name AS "userName",
+       e.detail
+     FROM access_events e
+     JOIN devices d ON d.device_id = e.device_id
+     LEFT JOIN people p ON p.person_id = e.user_id
+     ${where}
+     ORDER BY e.occurred_at DESC
+     LIMIT 200`,
+    values,
+  );
+  return { events: result.rows };
+});
+
 app.get<{ Params: { deviceId: string } }>(
   '/api/devices/:deviceId/events',
   { preHandler: requireAdmin },
@@ -547,7 +581,9 @@ app.get<{ Params: { deviceId: string } }>(
        g.valid_until AS "validUntil"
        FROM access_grants g
        JOIN people p ON p.person_id = g.person_id
-       WHERE g.device_id = $1 AND g.revoked_at IS NULL
+       WHERE g.device_id = $1
+         AND g.revoked_at IS NULL
+         AND (g.valid_until IS NULL OR g.valid_until > floor(extract(epoch from now())))
        ORDER BY g.created_at`,
       [deviceId],
     );
