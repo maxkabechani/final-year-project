@@ -79,7 +79,7 @@ function SettingsPage() {
                   required
                   value={apiUrl}
                   onChange={(event) => setApiUrl(event.target.value)}
-                  placeholder="https://api.cl3.example.com"
+                  placeholder="https://api-project.maxkabechani.dev"
                   autoComplete="url"
                 />
                 <p className="text-xs text-muted-foreground">Use the API origin only; do not append /api.</p>
