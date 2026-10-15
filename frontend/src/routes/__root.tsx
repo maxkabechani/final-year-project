@@ -8,9 +8,10 @@ import {
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TanStackRouterDevtools } from '@tanstack/react-router-devtools'
-import { AppShell } from '../components/AppShell'
-import { ConfigProvider } from '../lib/config'
-import appCss from '../styles.css?url'
+import { AppShell } from '@/components/AppShell'
+import { Toaster } from '@/components/ui/sonner'
+import { ConfigProvider } from '@/lib/config'
+import appCss from '@/styles.css?url'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,11 +30,11 @@ export const Route = createRootRoute({
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       {
         name: 'description',
-        content: 'CL3 laboratory smart access administration dashboard',
+        content: 'Administration dashboard for multiple BLE smart locks',
       },
     ],
     links: [{ rel: 'stylesheet', href: appCss }],
-    title: 'CL3 Smart Access',
+    title: 'Smart Access',
   }),
   component: RootComponent,
 })
@@ -46,6 +47,7 @@ function RootComponent() {
           <AppShell>
             <Outlet />
           </AppShell>
+          <Toaster />
         </ConfigProvider>
         {import.meta.env.DEV && <TanStackRouterDevtools position="bottom-right" />}
       </QueryClientProvider>
