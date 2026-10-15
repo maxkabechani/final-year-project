@@ -9,6 +9,7 @@ import {
   encryptCredentialHex,
   newCredential,
   newDeviceToken,
+  newMobileToken,
   sameSecret,
   tokenHash,
 } from './crypto.js';
@@ -20,6 +21,16 @@ const masterKey = process.env.CREDENTIAL_MASTER_KEY ?? '';
 const port = Number(process.env.PORT ?? '8080');
 
 const deviceIdSchema = z.string().min(3).max(40).regex(/^[A-Za-z0-9._-]+$/);
+const fullNameSchema = z.string().trim().min(2).max(120);
+const phoneNumberSchema = z.string().trim().min(8).max(24);
+
+function normalizePhoneNumber(value: string): string {
+  const compact = value.replace(/[\s()-]/g, '');
+  if (!/^\+?[0-9]{8,16}$/.test(compact)) {
+    throw Object.assign(new Error('Enter a valid phone number'), { statusCode: 400 });
+  }
+  return compact;
+}
 const accessTypeSchema = z.enum(['recurring', 'one_off']);
 const scheduleSchema = z.object({
   accessType: accessTypeSchema.default('recurring'),
@@ -104,6 +115,47 @@ async function requireDevice(
   );
   broadcast('device_seen', { deviceId: request.params.deviceId });
   return true;
+}
+
+async function requireMobile(request: FastifyRequest, reply: FastifyReply): Promise<{
+  personId: string;
+  name: string;
+  phoneNumber: string;
+  credentialCiphertext: string;
+} | null> {
+  const supplied = bearer(request);
+  if (!supplied) {
+    await reply.code(401).send({ error: 'Phone registration required' });
+    return null;
+  }
+
+  const result = await pool.query<{
+    personId: string;
+    name: string;
+    phoneNumber: string;
+    credentialCiphertext: string;
+  }>(
+    `SELECT
+       p.person_id AS "personId",
+       p.name,
+       p.phone_number AS "phoneNumber",
+       p.credential_ciphertext AS "credentialCiphertext"
+     FROM mobile_sessions s
+     JOIN people p ON p.person_id = s.person_id
+     WHERE s.token_hash = $1`,
+    [tokenHash(supplied)],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    await reply.code(401).send({ error: 'Phone registration is no longer valid' });
+    return null;
+  }
+
+  await pool.query(
+    'UPDATE mobile_sessions SET last_seen_at = now() WHERE token_hash = $1',
+    [tokenHash(supplied)],
+  );
+  return row;
 }
 
 app.setErrorHandler((error, _request, reply) => {
@@ -193,6 +245,155 @@ app.get('/', async () => ({
 }));
 app.get('/health', async () => ({ ok: true }));
 
+app.post('/api/mobile/register', async (request, reply) => {
+  const body = z.object({
+    fullName: fullNameSchema,
+    phoneNumber: phoneNumberSchema,
+    installationId: z.string().uuid(),
+    deviceLabel: z.string().trim().max(120).default('Android phone'),
+  }).parse(request.body);
+
+  const phoneNumber = normalizePhoneNumber(body.phoneNumber);
+  const mobileToken = newMobileToken();
+  const mobileTokenHash = tokenHash(mobileToken);
+
+  const existingInstallation = await pool.query<{
+    personId: string;
+    name: string;
+    phoneNumber: string;
+  }>(
+    `SELECT
+       p.person_id AS "personId",
+       p.name,
+       p.phone_number AS "phoneNumber"
+     FROM mobile_sessions s
+     JOIN people p ON p.person_id = s.person_id
+     WHERE s.installation_id = $1`,
+    [body.installationId],
+  );
+
+  if (existingInstallation.rows[0]) {
+    const existing = existingInstallation.rows[0];
+    if (existing.phoneNumber !== phoneNumber) {
+      return reply.code(409).send({
+        error: 'This phone is already registered to a different phone number',
+      });
+    }
+    await pool.query(
+      `UPDATE mobile_sessions
+       SET token_hash = $1, device_label = $2, last_seen_at = now()
+       WHERE installation_id = $3`,
+      [mobileTokenHash, body.deviceLabel, body.installationId],
+    );
+    await pool.query(
+      'UPDATE people SET name = $1 WHERE person_id = $2',
+      [body.fullName, existing.personId],
+    );
+    broadcast('people_changed', { personId: existing.personId });
+    return reply.send({
+      mobileToken,
+      person: {
+        personId: existing.personId,
+        fullName: body.fullName,
+        phoneNumber,
+      },
+    });
+  }
+
+  const existingPhone = await pool.query<{ personId: string }>(
+    'SELECT person_id AS "personId" FROM people WHERE phone_number = $1',
+    [phoneNumber],
+  );
+  if (existingPhone.rows[0]) {
+    return reply.code(409).send({
+      error: 'This phone number is already registered. Ask an administrator to help re-register the phone.',
+    });
+  }
+
+  const personId = randomUUID();
+  const credentialKeyHex = newCredential().toString('hex');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO people(person_id, name, phone_number, credential_ciphertext)
+       VALUES($1, $2, $3, $4)`,
+      [
+        personId,
+        body.fullName,
+        phoneNumber,
+        encryptCredentialHex(credentialKeyHex, masterKey),
+      ],
+    );
+    await client.query(
+      `INSERT INTO mobile_sessions(
+         session_id, person_id, installation_id, device_label, token_hash
+       ) VALUES($1, $2, $3, $4, $5)`,
+      [randomUUID(), personId, body.installationId, body.deviceLabel, mobileTokenHash],
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  broadcast('people_changed', { personId });
+  return reply.code(201).send({
+    mobileToken,
+    person: {
+      personId,
+      fullName: body.fullName,
+      phoneNumber,
+    },
+  });
+});
+
+app.get('/api/mobile/access', async (request, reply) => {
+  const mobile = await requireMobile(request, reply);
+  if (!mobile) return;
+
+  const grants = await pool.query(
+    `SELECT
+       g.grant_id AS "grantId",
+       g.device_id AS "deviceId",
+       d.name AS "deviceName",
+       d.location,
+       g.access_type AS "accessType",
+       g.days_mask AS "daysMask",
+       g.start_minute AS "startMinute",
+       g.end_minute AS "endMinute",
+       g.valid_from AS "validFrom",
+       g.valid_until AS "validUntil"
+     FROM access_grants g
+     JOIN devices d ON d.device_id = g.device_id
+     WHERE g.person_id = $1
+       AND g.revoked_at IS NULL
+       AND (g.valid_until IS NULL OR g.valid_until > floor(extract(epoch from now())))
+     ORDER BY d.name ASC`,
+    [mobile.personId],
+  );
+
+  return {
+    person: {
+      personId: mobile.personId,
+      fullName: mobile.name,
+      phoneNumber: mobile.phoneNumber,
+    },
+    credentialKeyHex: decryptCredentialHex(mobile.credentialCiphertext, masterKey),
+    serverUnixSeconds: Math.floor(Date.now() / 1000),
+    grants: grants.rows.map((row) => ({
+      ...row,
+      daysMask: Number(row.daysMask),
+      startMinute: Number(row.startMinute),
+      endMinute: Number(row.endMinute),
+      validFrom: Number(row.validFrom),
+      validUntil: row.validUntil === null ? null : Number(row.validUntil),
+    })),
+  };
+});
+
 app.get('/api/devices', { preHandler: requireAdmin }, async () => {
   const result = await pool.query(
     `SELECT
@@ -231,6 +432,7 @@ app.get('/api/people', { preHandler: requireAdmin }, async () => {
     `SELECT
        p.person_id AS "personId",
        p.name,
+       p.phone_number AS "phoneNumber",
        p.created_at AS "createdAt",
        COUNT(g.grant_id) FILTER (WHERE g.revoked_at IS NULL)::int AS "activeLocks"
      FROM people p
@@ -243,13 +445,19 @@ app.get('/api/people', { preHandler: requireAdmin }, async () => {
 
 app.post('/api/people', { preHandler: requireAdmin }, async (request, reply) => {
   const body = z.object({
-    name: z.string().trim().min(1).max(120),
+    name: fullNameSchema,
+    phoneNumber: phoneNumberSchema.optional(),
   }).parse(request.body);
   const personId = randomUUID();
   const credentialKeyHex = newCredential().toString('hex');
   await pool.query(
-    'INSERT INTO people(person_id, name, credential_ciphertext) VALUES($1, $2, $3)',
-    [personId, body.name, encryptCredentialHex(credentialKeyHex, masterKey)],
+    'INSERT INTO people(person_id, name, phone_number, credential_ciphertext) VALUES($1, $2, $3, $4)',
+    [
+      personId,
+      body.name,
+      body.phoneNumber ? normalizePhoneNumber(body.phoneNumber) : null,
+      encryptCredentialHex(credentialKeyHex, masterKey),
+    ],
   );
   broadcast('people_changed', { personId });
   return reply.code(201).send({ personId, name: body.name, credentialKeyHex });
