@@ -60,7 +60,7 @@ export function SectionCards({
   ]
 
   return (
-    <div className="grid grid-cols-1 gap-4 px-4 md:grid-cols-2 lg:px-6 xl:grid-cols-4">
+    <div className="grid min-w-0 max-w-full grid-cols-1 gap-4 px-4 md:grid-cols-2 lg:px-6 xl:grid-cols-4">
       {cards.map(({ label, value, badge, icon: Icon, primary, secondary, success }) => (
         <Card key={label} className="@container/card bg-gradient-to-t from-muted/50 to-card shadow-xs">
           <CardHeader>
