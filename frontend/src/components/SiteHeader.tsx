@@ -1,9 +1,10 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Menu, PanelLeft, Settings2, Wifi } from 'lucide-react'
+import { LogOut, Menu, PanelLeft, Settings2, Wifi } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { useAdminConfig } from '@/lib/config'
+import { authClient } from '@/lib/auth-client'
 
 const titles: Record<string, string> = {
   '/': 'Dashboard',
@@ -27,6 +28,7 @@ export function SiteHeader({
 }: SiteHeaderProps) {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const { configured } = useAdminConfig()
+  const { data: session } = authClient.useSession()
   const title = titles[pathname] ?? 'Smart Access'
 
   return (
@@ -70,10 +72,22 @@ export function SiteHeader({
             API configured
           </Badge>
         )}
+        <span className="hidden max-w-40 truncate text-xs text-muted-foreground lg:inline">
+          {session?.user.name}
+        </span>
         <Button asChild variant="ghost" size="icon-sm">
           <Link to="/settings" aria-label="Open settings">
             <Settings2 />
           </Link>
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Sign out"
+          onClick={() => void authClient.signOut()}
+        >
+          <LogOut />
         </Button>
       </div>
     </header>
