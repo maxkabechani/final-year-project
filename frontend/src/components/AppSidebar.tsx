@@ -18,20 +18,23 @@ import { cn } from '@/lib/utils'
 
 const mainNav = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/devices', label: 'Controllers', icon: DoorOpen },
-  { to: '/access', label: 'Access', icon: UsersRound },
+  { to: '/devices', label: 'Smart locks', icon: DoorOpen },
+  { to: '/people', label: 'People', icon: UsersRound },
+  { to: '/access', label: 'Access', icon: KeyRound },
   { to: '/events', label: 'Activity', icon: Activity },
 ] as const
 
 type AppSidebarProps = {
   mobileOpen: boolean
   collapsed: boolean
+  liveConnected: boolean
   onMobileClose: () => void
 }
 
 export function AppSidebar({
   mobileOpen,
   collapsed,
+  liveConnected,
   onMobileClose,
 }: AppSidebarProps) {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
@@ -61,8 +64,8 @@ export function AppSidebar({
             <ShieldCheck className="size-4" />
           </div>
           <div className={cn('min-w-0 flex-1 leading-tight', collapsed && 'md:hidden')}>
-            <div className="truncate text-sm font-semibold">CL3 Smart Access</div>
-            <div className="truncate text-xs text-muted-foreground">Control centre</div>
+            <div className="truncate text-sm font-semibold">Smart Access</div>
+            <div className="truncate text-xs text-muted-foreground">Multi-lock control centre</div>
           </div>
           <Button
             type="button"
@@ -116,7 +119,7 @@ export function AppSidebar({
               className={cn(
                 buttonVariants({ size: 'sm' }),
                 'w-full justify-start',
-                collapsed && 'md:size-9 md:p-0 md:justify-center',
+                collapsed && 'md:size-9 md:justify-center md:p-0',
               )}
             >
               <UserRoundPlus />
@@ -125,15 +128,15 @@ export function AppSidebar({
             <Link
               to="/devices"
               onClick={onMobileClose}
-              title={collapsed ? 'Register controller' : undefined}
+              title={collapsed ? 'Register smart lock' : undefined}
               className={cn(
                 buttonVariants({ variant: 'outline', size: 'sm' }),
                 'w-full justify-start bg-sidebar',
-                collapsed && 'md:size-9 md:p-0 md:justify-center',
+                collapsed && 'md:size-9 md:justify-center md:p-0',
               )}
             >
-              <KeyRound />
-              <span className={cn(collapsed && 'md:hidden')}>Register controller</span>
+              <DoorOpen />
+              <span className={cn(collapsed && 'md:hidden')}>Register lock</span>
             </Link>
           </div>
         </div>
@@ -162,20 +165,24 @@ export function AppSidebar({
             <span
               className={cn(
                 'size-2 shrink-0 rounded-full',
-                configured ? 'bg-emerald-500' : 'bg-amber-500',
+                configured && liveConnected ? 'bg-emerald-500' : configured ? 'bg-amber-500' : 'bg-muted-foreground',
               )}
             />
             <div className={cn('min-w-0 flex-1', collapsed && 'md:hidden')}>
               <div className="truncate text-xs font-medium">
-                {configured ? 'API connected' : 'Setup required'}
+                {!configured ? 'Setup required' : liveConnected ? 'Live connection' : 'API configured'}
               </div>
               <div className="truncate text-[11px] text-muted-foreground">
-                {configured ? 'Administrator session ready' : 'Add API credentials'}
+                {!configured
+                  ? 'Add API credentials'
+                  : liveConnected
+                    ? 'WebSocket updates active'
+                    : 'Waiting for live updates'}
               </div>
             </div>
-            {!collapsed && (
-              <Badge variant="outline" className="hidden text-[10px] xl:inline-flex">
-                {configured ? 'Ready' : 'Setup'}
+            {!collapsed && configured && liveConnected && (
+              <Badge className="hidden bg-emerald-500 text-white hover:bg-emerald-500 xl:inline-flex">
+                Live
               </Badge>
             )}
           </div>
