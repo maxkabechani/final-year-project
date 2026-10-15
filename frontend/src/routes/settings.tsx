@@ -46,14 +46,14 @@ function SettingsPage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
+    <div className="flex min-w-0 max-w-full flex-1 flex-col gap-4 py-4 md:gap-6 md:py-6">
       <PageHeader
         eyebrow="Dashboard configuration"
         title="API connection"
         description="Connect the TanStack application to the separately deployed Fastify API."
       />
 
-      <div className="max-w-3xl px-4 lg:px-6">
+      <div className="w-full min-w-0 max-w-3xl px-4 lg:px-6">
         <Card>
           <CardHeader>
             <div className="flex items-start justify-between gap-4">
