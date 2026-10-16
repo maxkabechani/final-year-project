@@ -259,7 +259,7 @@ static uint32_t nowUnix() {
   return clockEpoch + static_cast<uint32_t>((millis() - clockAtMillis) / 1000U);
 }
 
-static void setSoftwareClock(uint32_t unixSeconds, bool persist = true) {
+static void setSoftwareClock(uint32_t unixSeconds, bool persist) {
   if (unixSeconds < 1700000000U) return;
   clockEpoch = unixSeconds;
   clockAtMillis = millis();
@@ -330,10 +330,14 @@ static void showMessage(const char *line1, const char *line2) {
   Serial.printf("%s | %s\n", line1, line2);
 }
 
-static void beep(uint16_t durationMs = 65) {
+static void beep(uint16_t durationMs) {
   digitalWrite(SMART_LOCK_PIN_BUZZER, HIGH);
   delay(durationMs);
   digitalWrite(SMART_LOCK_PIN_BUZZER, LOW);
+}
+
+static void beep() {
+  beep(65);
 }
 
 static void unlockDoor(const uint8_t *userId) {
