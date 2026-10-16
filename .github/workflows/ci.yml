@@ -41,7 +41,6 @@ jobs:
       arduino: ${{ steps.filter.outputs.arduino }}
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
-      ci: ${{ steps.filter.outputs.ci }}
     steps:
       - uses: actions/checkout@v4
       - id: filter
@@ -64,13 +63,11 @@ jobs:
               - 'frontend/**'
               - '!frontend/**/*.md'
               - 'docker-compose.yml'
-            ci:
-              - '.github/workflows/ci.yml'
 
   android:
     name: Android app and APK
     needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.ci == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.mobile == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -113,7 +110,7 @@ jobs:
   firmware:
     name: Smart lock firmware compile
     needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.firmware == 'true' || needs.changes.outputs.ci == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.firmware == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -126,7 +123,7 @@ jobs:
   arduino_firmware:
     name: ArduinoDroid sketch compile
     needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.arduino == 'true' || needs.changes.outputs.ci == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.arduino == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -139,12 +136,24 @@ jobs:
           arduino-cli core install esp32:esp32@2.0.17
           arduino-cli lib install "ArduinoJson@7.4.2"
       - name: Compile Android-ready sketch
-        run: arduino-cli compile --fqbn esp32:esp32:esp32 firmware-android/SmartAccessLock
+        run: |
+          mkdir -p firmware-android/build
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32 \
+            --output-dir firmware-android/build \
+            firmware-android/SmartAccessLock
+      - name: Upload compiled ESP32 firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: Smart-Access-ESP32-Firmware
+          path: firmware-android/build/
+          if-no-files-found: error
+          retention-days: 30
 
   backend:
     name: Fastify API checks
     needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -160,7 +169,7 @@ jobs:
   frontend:
     name: TanStack dashboard checks
     needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
