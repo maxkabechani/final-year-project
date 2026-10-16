@@ -19,6 +19,7 @@
 // ============================================================
 // SMART ACCESS - ANDROID / ARDUINODROID SKETCH
 // GitHub Actions also exports compiled binaries for USB flashing.
+// CI target: ArduinoDroid firmware only.
 // Edit only this section for the controller you are flashing.
 // The defaults below are enough for an offline BLE demo.
 // ============================================================
