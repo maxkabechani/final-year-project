@@ -1,7 +1,10 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
-#include <NimBLEDevice.h>
+#include "BLEDevice.h"
+#include "BLEServer.h"
+#include "BLEUtils.h"
+#include "BLE2902.h"
 #include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -73,7 +76,7 @@ enum EventType : uint8_t {
 };
 
 Preferences preferences;
-NimBLECharacteristic *messageCharacteristic = nullptr;
+BLECharacteristic *messageCharacteristic = nullptr;
 std::vector<UserRecord> users;
 std::vector<EventRecord> events;
 
@@ -643,11 +646,21 @@ static void processEncryptedMessage(const uint8_t *value, size_t length) {
   sessionActive = false;
 }
 
-class ControlCallbacks : public NimBLECharacteristicCallbacks {
+class SmartAccessServerCallbacks : public BLEServerCallbacks {
  public:
-  void onWrite(NimBLECharacteristic *characteristic,
-               NimBLEConnInfo &connectionInfo) override {
-    (void)connectionInfo;
+  void onConnect(BLEServer *server) override {
+    (void)server;
+  }
+
+  void onDisconnect(BLEServer *server) override {
+    // Match SunFounder's ESP32 BLE pattern and immediately advertise again.
+    server->getAdvertising()->start();
+  }
+};
+
+class ControlCallbacks : public BLECharacteristicCallbacks {
+ public:
+  void onWrite(BLECharacteristic *characteristic) override {
     const std::string value = characteristic->getValue();
     if (value.empty() || value.size() > kMaxBleMessage) return;
     portENTER_CRITICAL(&bleMux);
@@ -661,19 +674,41 @@ class ControlCallbacks : public NimBLECharacteristicCallbacks {
 static void setupBle() {
   String advertisedName = "LOCK-" + String(SMART_LOCK_DEVICE_ID);
   if (advertisedName.length() > 24) advertisedName.remove(24);
-  NimBLEDevice::init(advertisedName.c_str());
-  NimBLEDevice::setMTU(247);
-  NimBLEServer *server = NimBLEDevice::createServer();
-  NimBLEService *service = server->createService(kServiceUuid);
-  NimBLECharacteristic *control = service->createCharacteristic(
-      kControlUuid, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+
+  // Use the same built-in ESP32 BLE stack/pattern as SunFounder's working
+  // Starter Kit example. ArduinoDroid proved this stack works on the board.
+  BLEDevice::init(advertisedName.c_str());
+
+  BLEServer *server = BLEDevice::createServer();
+  if (server == nullptr) {
+    Serial.println("BLE server creation failed");
+    return;
+  }
+  server->setCallbacks(new SmartAccessServerCallbacks());
+
+  BLEService *service = server->createService(kServiceUuid);
+  if (service == nullptr) {
+    Serial.println("BLE service creation failed");
+    return;
+  }
+
+  BLECharacteristic *control = service->createCharacteristic(
+      kControlUuid,
+      BLECharacteristic::PROPERTY_WRITE);
+
   messageCharacteristic = service->createCharacteristic(
-      kMessageUuid, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+      kMessageUuid,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+
+  // Android notification subscriptions expect the standard CCCD descriptor.
+  messageCharacteristic->addDescriptor(new BLE2902());
   control->setCallbacks(new ControlCallbacks());
+
   service->start();
-  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
-  advertising->addServiceUUID(kServiceUuid);
-  advertising->start();
+
+  // Intentionally mirror SunFounder: advertise from the server object.
+  server->getAdvertising()->start();
+  Serial.printf("BLE advertising as %s\n", advertisedName.c_str());
 }
 
 static String backendRoot(const char *path) {
