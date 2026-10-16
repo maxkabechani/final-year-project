@@ -374,8 +374,12 @@ class _AccessHomePageState extends State<AccessHomePage> {
         if (changed && mounted) setState(() {});
       });
 
+      // Do not rely on Android's service-UUID scan filter here. Some older
+      // ESP32/NimBLE stacks put the 128-bit service UUID in a way that certain
+      // Android scanners do not match reliably. We still only show devices
+      // advertising the LOCK- identity, and _connect() verifies the exact
+      // Smart Access service UUID before any unlock request is accepted.
       await FlutterBluePlus.startScan(
-        withServices: <Guid>[Guid(bleServiceUuid)],
         timeout: const Duration(seconds: 8),
       );
       await Future<void>.delayed(const Duration(seconds: 8));
