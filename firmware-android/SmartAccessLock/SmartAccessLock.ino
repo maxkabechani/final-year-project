@@ -667,11 +667,16 @@ class SmartAccessServerCallbacks : public BLEServerCallbacks {
 class ControlCallbacks : public BLECharacteristicCallbacks {
  public:
   void onWrite(BLECharacteristic *characteristic) override {
-    const std::string value = characteristic->getValue();
-    if (value.empty() || value.size() > kMaxBleMessage) return;
+    // BLECharacteristic::getValue() differs between ESP32 Arduino builds:
+    // some return std::string, while ArduinoDroid's bundled BLE library can
+    // return Arduino String. Both support length() and c_str(), so avoid
+    // depending on either concrete type here.
+    const auto value = characteristic->getValue();
+    const size_t valueLength = value.length();
+    if (valueLength == 0 || valueLength > kMaxBleMessage) return;
     portENTER_CRITICAL(&bleMux);
-    memcpy(pendingBleBytes, value.data(), value.size());
-    pendingBleLength = value.size();
+    memcpy(pendingBleBytes, value.c_str(), valueLength);
+    pendingBleLength = valueLength;
     pendingBleWrite = true;
     portEXIT_CRITICAL(&bleMux);
   }
