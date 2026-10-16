@@ -272,6 +272,10 @@ static void setSoftwareClock(uint32_t unixSeconds, bool persist) {
   }
 }
 
+static void setSoftwareClock(uint32_t unixSeconds) {
+  setSoftwareClock(unixSeconds, true);
+}
+
 static void saveEvents() {
   if (events.empty()) {
     preferences.remove("events");
