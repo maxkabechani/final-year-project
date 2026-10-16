@@ -693,7 +693,7 @@ static bool secureGet(const String &url, String &body) {
   WiFiClientSecure client;
   client.setCACert(SMART_LOCK_BACKEND_ROOT_CA);
   HTTPClient http;
-  if (!http.begin(client, url)) return false;
+  if (!http.begin(url, SMART_LOCK_BACKEND_ROOT_CA)) return false;
   http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
   const int status = http.GET();
   if (status >= 200 && status < 300) body = http.getString();
@@ -705,7 +705,7 @@ static bool securePost(const String &url, const String &body) {
   WiFiClientSecure client;
   client.setCACert(SMART_LOCK_BACKEND_ROOT_CA);
   HTTPClient http;
-  if (!http.begin(client, url)) return false;
+  if (!http.begin(url, SMART_LOCK_BACKEND_ROOT_CA)) return false;
   http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
   http.addHeader("Content-Type", "application/json");
   const int status = http.POST(body);
