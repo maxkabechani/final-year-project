@@ -380,7 +380,11 @@ static bool scheduleAllows(const UserRecord &user, uint32_t utcSeconds) {
 
 static void notifyBytes(const std::vector<uint8_t> &value) {
   if (messageCharacteristic == nullptr || value.empty()) return;
-  messageCharacteristic->setValue(value.data(), value.size());
+
+  // ESP32 Arduino core 2.0.17 exposes BLECharacteristic::setValue(uint8_t*, size_t)
+  // rather than a const-byte overload. Copy into a mutable buffer for compatibility.
+  std::vector<uint8_t> bytes(value.begin(), value.end());
+  messageCharacteristic->setValue(bytes.data(), bytes.size());
   messageCharacteristic->notify();
 }
 
