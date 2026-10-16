@@ -2,15 +2,75 @@ name: Smart Access CI
 
 on:
   push:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '**/*.pdf'
+      - '**/*.ppt'
+      - '**/*.pptx'
+      - '**/*.doc'
+      - '**/*.docx'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '**/*.pdf'
+      - '**/*.ppt'
+      - '**/*.pptx'
+      - '**/*.doc'
+      - '**/*.docx'
   workflow_dispatch:
+
+# Connector-driven edits can create several commits in quick succession.
+# Keep only the newest run for a branch instead of wasting runners on stale commits.
+concurrency:
+  group: smart-access-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  changes:
+    name: Detect changed components
+    runs-on: ubuntu-latest
+    outputs:
+      mobile: ${{ steps.filter.outputs.mobile }}
+      firmware: ${{ steps.filter.outputs.firmware }}
+      arduino: ${{ steps.filter.outputs.arduino }}
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      ci: ${{ steps.filter.outputs.ci }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            mobile:
+              - 'mobile/**'
+              - '!mobile/**/*.md'
+            firmware:
+              - 'firmware/**'
+              - '!firmware/**/*.md'
+            arduino:
+              - 'firmware-android/SmartAccessLock/**'
+            backend:
+              - 'backend/**'
+              - '!backend/**/*.md'
+              - 'docker-compose.yml'
+            frontend:
+              - 'frontend/**'
+              - '!frontend/**/*.md'
+              - 'docker-compose.yml'
+            ci:
+              - '.github/workflows/ci.yml'
+
   android:
     name: Android app and APK
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.mobile == 'true' || needs.changes.outputs.ci == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +112,8 @@ jobs:
 
   firmware:
     name: Smart lock firmware compile
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.firmware == 'true' || needs.changes.outputs.ci == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,6 +125,8 @@ jobs:
 
   arduino_firmware:
     name: ArduinoDroid sketch compile
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.arduino == 'true' || needs.changes.outputs.ci == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -79,6 +143,8 @@ jobs:
 
   backend:
     name: Fastify API checks
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ci == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -93,6 +159,8 @@ jobs:
 
   frontend:
     name: TanStack dashboard checks
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.ci == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:
