@@ -1,26 +1,25 @@
 # Smart Access firmware for ArduinoDroid
 
-This folder contains a **single Arduino sketch** for the final presentation controller:
+This folder contains the Android-friendly firmware for the final presentation controller:
 
 `SmartAccessLock/SmartAccessLock.ino`
 
-It is the same Smart Access firmware as the PlatformIO build, but the configuration is at the top of the sketch so it is easier to flash directly from an Android phone.
+The configuration is at the top of the sketch so it is easy to flash directly from an Android phone.
 
 ## ArduinoDroid setup
 
 1. Install the ESP32 board support in ArduinoDroid.
-2. Install these two libraries from the Library Manager:
-   - `NimBLE-Arduino`
-   - `ArduinoJson`
-3. Open `SmartAccessLock.ino`.
-4. Select **ESP32 Dev Module**.
-5. Connect the ESP32 to the phone using a USB OTG adapter/cable.
-6. Tap **Compile**, then **Upload**.
-7. Open Serial Monitor at **115200 baud** if you want to see pairing and sync messages.
+2. Use **ESP32 Arduino core 2.0.17** if ArduinoDroid lets you choose the version.
+3. Install **ArduinoJson** from the Library Manager.
+4. Do **not** install/use NimBLE-Arduino for this sketch. The Android build now uses the ESP32 core's built-in BLE library, following the same BLE pattern as SunFounder's working example.
+5. Open `SmartAccessLock.ino`.
+6. Select **ESP32 Dev Module**.
+7. Connect the ESP32 to the phone using USB OTG.
+8. Tap **Compile**, then **Upload**.
 
-## First test
+## First BLE test
 
-You do not need Wi-Fi for the first BLE test. The sketch already defaults to:
+The default controller configuration is:
 
 - controller ID: `front-door-01`
 - BLE name: `LOCK-front-door-01`
@@ -29,24 +28,22 @@ You do not need Wi-Fi for the first BLE test. The sketch already defaults to:
 - buzzer: GPIO 14
 - RGB: GPIO 27 / 26 / 25
 
-Leave Wi-Fi and device token blank for the first upload.
+Leave Wi-Fi and device token blank if you only want to verify BLE advertising first.
 
-In the Android Smart Access app:
+After uploading, press **EN/RESET**. The controller should advertise as:
 
-1. Use/import a credential for `front-door-01`.
-2. Scan and connect to `LOCK-front-door-01`.
-3. Enter pairing PIN `246810`.
-4. Enroll the phone.
-5. Use **Biometric unlock**.
+`LOCK-front-door-01`
 
-The phone enrollment carries a valid time window, so the ESP32 can initialize its software clock without a physical RTC.
+The Smart Access Android app scans for `LOCK-` devices and then verifies the Smart Access service UUID before attempting an unlock.
 
-## Connected mode later
+## Connected mode
 
-For backend synchronization, edit the configuration block at the very top of the sketch and provide:
+For the full dashboard-to-lock flow, edit the configuration block at the top of the sketch and provide:
 
 - Wi-Fi SSID/password
 - controller token from the dashboard
 - backend root CA certificate
 
 The backend URL is already set to `https://api-project.maxkabechani.dev`.
+
+The controller must sync grants/time from the backend before the current simplified mobile app can perform an authorized offline BLE unlock.
