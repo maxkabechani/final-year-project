@@ -34,6 +34,10 @@
 #ifndef SMART_LOCK_PIN_RELAY
 #define SMART_LOCK_PIN_RELAY 33
 #endif
+// Final relay module is active-high: HIGH energizes the relay, LOW releases it.
+#ifndef SMART_LOCK_RELAY_ACTIVE_HIGH
+#define SMART_LOCK_RELAY_ACTIVE_HIGH 1
+#endif
 #ifndef SMART_LOCK_PIN_BUZZER
 #define SMART_LOCK_PIN_BUZZER 14
 #endif
