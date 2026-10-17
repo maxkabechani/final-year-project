@@ -24,7 +24,7 @@ The default controller configuration is:
 - controller ID: `front-door-01`
 - BLE name: `LOCK-front-door-01`
 - pairing PIN: `246810`
-- relay: GPIO 33
+- relay: GPIO 33, active-high
 - buzzer: GPIO 14
 - RGB: GPIO 27 / 26 / 25
 
@@ -34,7 +34,7 @@ After uploading, press **EN/RESET**. The controller should advertise as:
 
 `LOCK-front-door-01`
 
-The Smart Access Android app scans for `LOCK-` devices and then verifies the Smart Access service UUID before attempting an unlock.
+The Smart Access Android app scans for `LOCK-` devices and then verifies the Smart Access service UUID before attempting an unlock. The firmware explicitly advertises the service UUID and uses a scan response so Android/Flutter scanners can reliably receive the controller name.
 
 ## Connected mode
 
