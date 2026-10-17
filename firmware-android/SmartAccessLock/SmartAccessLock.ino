@@ -37,7 +37,7 @@
 
 // Final presentation hardware pins.
 #define SMART_LOCK_PIN_RELAY 33
-#define SMART_LOCK_RELAY_ACTIVE_HIGH 1
+#define SMART_LOCK_RELAY_ACTIVE_HIGH 1  // Confirmed final relay module polarity.
 #define SMART_LOCK_PIN_BUZZER 14
 #define SMART_LOCK_PIN_LED_RED 27
 #define SMART_LOCK_PIN_LED_GREEN 26
