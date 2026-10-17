@@ -27,6 +27,8 @@ static const uint32_t kPairWindowMs = 120000;
 static const uint32_t kSessionWindowMs = 15000;
 static const uint32_t kUnlockMs = 5000;
 static const size_t kMaxBleMessage = 128;
+static const uint8_t kRelayOnLevel = SMART_LOCK_RELAY_ACTIVE_HIGH ? HIGH : LOW;
+static const uint8_t kRelayOffLevel = SMART_LOCK_RELAY_ACTIVE_HIGH ? LOW : HIGH;
 
 struct __attribute__((packed)) UserRecord {
   uint8_t userId[16];
@@ -317,7 +319,7 @@ static void beep(uint16_t durationMs = 65) {
 }
 
 static void unlockDoor(const uint8_t *userId) {
-  digitalWrite(SMART_LOCK_PIN_RELAY, LOW);
+  digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOnLevel);
   unlockUntil = millis() + kUnlockMs;
   setRgb(false, true, false);
   beep();
@@ -802,7 +804,7 @@ static void startPairingWindow() {
 void setup() {
   Serial.begin(115200);
   pinMode(SMART_LOCK_PIN_RELAY, OUTPUT);
-  digitalWrite(SMART_LOCK_PIN_RELAY, HIGH);
+  digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOffLevel);
   pinMode(SMART_LOCK_PIN_BUZZER, OUTPUT);
   digitalWrite(SMART_LOCK_PIN_BUZZER, LOW);
   pinMode(SMART_LOCK_PIN_LED_RED, OUTPUT);
@@ -848,7 +850,7 @@ void loop() {
   }
 
   if (unlockUntil != 0 && static_cast<int32_t>(millis() - unlockUntil) >= 0) {
-    digitalWrite(SMART_LOCK_PIN_RELAY, HIGH);
+    digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOffLevel);
     unlockUntil = 0;
     setRgb(false, false, true);
     showMessage("Smart lock", clockValid ? "Ready" : "Waiting for time sync");
