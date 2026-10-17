@@ -37,6 +37,7 @@
 
 // Final presentation hardware pins.
 #define SMART_LOCK_PIN_RELAY 33
+#define SMART_LOCK_RELAY_ACTIVE_HIGH 1
 #define SMART_LOCK_PIN_BUZZER 14
 #define SMART_LOCK_PIN_LED_RED 27
 #define SMART_LOCK_PIN_LED_GREEN 26
@@ -52,6 +53,8 @@ static const uint32_t kPairWindowMs = 120000;
 static const uint32_t kSessionWindowMs = 15000;
 static const uint32_t kUnlockMs = 5000;
 static const size_t kMaxBleMessage = 128;
+static const uint8_t kRelayOnLevel = SMART_LOCK_RELAY_ACTIVE_HIGH ? HIGH : LOW;
+static const uint8_t kRelayOffLevel = SMART_LOCK_RELAY_ACTIVE_HIGH ? LOW : HIGH;
 
 struct __attribute__((packed)) UserRecord {
   uint8_t userId[16];
@@ -350,7 +353,7 @@ static void beep() {
 }
 
 static void unlockDoor(const uint8_t *userId) {
-  digitalWrite(SMART_LOCK_PIN_RELAY, LOW);
+  digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOnLevel);
   unlockUntil = millis() + kUnlockMs;
   setRgb(false, true, false);
   beep();
@@ -717,8 +720,13 @@ static void setupBle() {
 
   service->start();
 
-  // Intentionally mirror SunFounder: advertise from the server object.
-  server->getAdvertising()->start();
+  // Explicitly advertise the Smart Access service and put the device name in
+  // the scan response. This makes discovery reliable for Flutter/Android
+  // scanners while keeping the same built-in ESP32 BLE stack.
+  BLEAdvertising *advertising = server->getAdvertising();
+  advertising->addServiceUUID(kServiceUuid);
+  advertising->setScanResponse(true);
+  advertising->start();
   Serial.printf("BLE advertising as %s\n", advertisedName.c_str());
 }
 
@@ -876,7 +884,7 @@ static void startPairingWindow() {
 void setup() {
   Serial.begin(115200);
   pinMode(SMART_LOCK_PIN_RELAY, OUTPUT);
-  digitalWrite(SMART_LOCK_PIN_RELAY, HIGH);
+  digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOffLevel);
   pinMode(SMART_LOCK_PIN_BUZZER, OUTPUT);
   digitalWrite(SMART_LOCK_PIN_BUZZER, LOW);
   pinMode(SMART_LOCK_PIN_LED_RED, OUTPUT);
@@ -922,7 +930,7 @@ void loop() {
   }
 
   if (unlockUntil != 0 && static_cast<int32_t>(millis() - unlockUntil) >= 0) {
-    digitalWrite(SMART_LOCK_PIN_RELAY, HIGH);
+    digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOffLevel);
     unlockUntil = 0;
     setRgb(false, false, true);
     showMessage("Smart lock", clockValid ? "Ready" : "Waiting for time sync");
