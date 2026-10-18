@@ -747,6 +747,33 @@ static bool backendReady() {
          WiFi.status() == WL_CONNECTED;
 }
 
+static void probeBackendHealth() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  client.setTimeout(8000);
+  HTTPClient http;
+  const String url = backendRoot("/health");
+  http.setConnectTimeout(8000);
+  http.setTimeout(8000);
+  if (!http.begin(client, url)) {
+    Serial.println("Backend health probe setup failed.");
+    return;
+  }
+
+  const int status = http.GET();
+  if (status >= 200 && status < 300) {
+    Serial.printf("Backend HTTPS reachable: HTTP %d\n", status);
+  } else if (status < 0) {
+    Serial.printf("Backend HTTPS probe failed: %s\n",
+                  HTTPClient::errorToString(status).c_str());
+  } else {
+    Serial.printf("Backend HTTPS probe returned HTTP %d\n", status);
+  }
+  http.end();
+}
+
 static bool applySyncDocument(JsonDocument &document) {
   const uint32_t unixSeconds = document["serverUnixSeconds"] | 0U;
   if (unixSeconds >= 1700000000U) {
@@ -1084,6 +1111,7 @@ void loop() {
     if (wifiStatus == WL_CONNECTED) {
       Serial.printf("Wi-Fi connected. IP=%s RSSI=%d dBm\n",
                     WiFi.localIP().toString().c_str(), WiFi.RSSI());
+      probeBackendHealth();
       startBackendWebSocket();
     } else if (strlen(SMART_LOCK_WIFI_SSID) > 0) {
       Serial.printf("Wi-Fi status changed: %d\n", wifiStatus);
