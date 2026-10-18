@@ -141,6 +141,18 @@ jobs:
           APK_SOURCE_SHA: ${{ steps.apk.outputs.source_sha }}
         run: |
           set -euo pipefail
+          report_release_error() {
+            status=$?
+            if test -s release-error.log; then
+              message=$(tail -10 release-error.log)
+              message=${message//%/%25}
+              message=${message//$'\r'/%0D}
+              message=${message//$'\n'/%0A}
+              echo "::error::${message}"
+            fi
+            exit "$status"
+          }
+          trap report_release_error ERR
           tag="android-${APK_SOURCE_SHA}"
           cat > release-notes.md <<EOF
           Smart Access Android demo APK built from commit ${APK_SOURCE_SHA}.
@@ -148,12 +160,12 @@ jobs:
           Download Smart-Access.apk on your Android phone. This is the debug build used for the project demonstration.
           EOF
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" apk/Smart-Access.apk --clobber
-            gh release edit "$tag" --latest --notes-file release-notes.md
+            gh release upload "$tag" apk/Smart-Access.apk --clobber 2>release-error.log
+            gh release edit "$tag" --latest --notes-file release-notes.md 2>release-error.log
           else
             gh release create "$tag" apk/Smart-Access.apk \
-              --target "$APK_SOURCE_SHA" --latest \
-              --title "Smart Access Android" --notes-file release-notes.md
+              --target "$GITHUB_SHA" --latest \
+              --title "Smart Access Android" --notes-file release-notes.md 2>release-error.log
           fi
 
   firmware:
