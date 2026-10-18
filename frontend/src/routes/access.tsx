@@ -203,18 +203,35 @@ function AccessPage() {
           <CardContent>
             <form className="space-y-5" onSubmit={submit}>
               <div className="grid gap-2">
-                <label className="text-sm font-medium">Person</label>
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-sm font-medium">Person</label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={people.isFetching}
+                    onClick={() => void people.refetch()}
+                  >
+                    {people.isFetching ? 'Refreshing…' : 'Refresh students'}
+                  </Button>
+                </div>
                 <SearchCombobox
                   value={personId}
                   onValueChange={setPersonId}
                   options={personOptions}
-                  placeholder="Select registered student"
+                  placeholder={people.isLoading ? 'Loading students…' : 'Select registered student'}
                   searchPlaceholder="Search name or student number…"
-                  emptyMessage="No matching students."
-                  disabled={registeredPeople.length === 0}
+                  emptyMessage={people.error ? 'Could not load students. Use Refresh students to retry.' : registeredPeople.length === 0 ? 'No registered students yet. Register in the Android app, then refresh.' : 'No matching students.'}
+                  disabled={people.isLoading}
                 />
-                {registeredPeople.length === 0 && (
-                  <p className="text-xs text-muted-foreground">No app registrations yet. Ask the student to register the app first.</p>
+                {people.error ? (
+                  <PageError error={people.error} />
+                ) : !people.isLoading && registeredPeople.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {(people.data?.length ?? 0) > 0
+                      ? 'The existing people do not have student numbers. Register the student in the Android app, then refresh.'
+                      : 'No app registrations yet. Ask the student to register in the Android app, then refresh.'}
+                  </p>
                 )}
               </div>
 

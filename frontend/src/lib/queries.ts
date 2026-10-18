@@ -30,6 +30,7 @@ export function usePeople() {
     enabled: configured,
     queryFn: () => apiRequest<{ people: Person[] }>(config, '/api/people'),
     select: (result) => result.people,
+    refetchInterval: 30_000,
   })
 }
 
