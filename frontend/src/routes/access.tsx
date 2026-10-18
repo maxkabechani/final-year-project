@@ -4,6 +4,7 @@ import { KeyRound, Smartphone, Trash2, UserPlus } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 import { DataTable } from '@/components/DataTable'
+import { SearchCombobox } from '@/components/SearchCombobox'
 import { PageError } from '@/components/PageState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
@@ -55,7 +56,21 @@ function AccessPage() {
   const [startTime, setStartTime] = useState('08:00')
   const [endTime, setEndTime] = useState('18:00')
 
-  const registeredPeople = (people.data ?? []).filter((person) => Boolean(person.phoneNumber))
+  const registeredPeople = (people.data ?? []).filter((person) => Boolean(person.studentNumber))
+
+  const personOptions = registeredPeople.map((person) => ({
+    value: person.personId,
+    label: person.name,
+    description: person.studentNumber ?? undefined,
+    keywords: person.studentNumber ?? undefined,
+  }))
+
+  const deviceOptions = (devices.data ?? []).map((device) => ({
+    value: device.deviceId,
+    label: device.name,
+    description: device.location || device.deviceId,
+    keywords: `${device.deviceId} ${device.location}`,
+  }))
 
   const columns = useMemo<ColumnDef<AccessGrant>[]>(() => [
     {
@@ -189,33 +204,31 @@ function AccessPage() {
             <form className="space-y-5" onSubmit={submit}>
               <div className="grid gap-2">
                 <label className="text-sm font-medium">Person</label>
-                <Select value={personId} onValueChange={setPersonId}>
-                  <SelectTrigger className="w-full"><SelectValue placeholder="Select registered person" /></SelectTrigger>
-                  <SelectContent>
-                    {registeredPeople.map((person) => (
-                      <SelectItem key={person.personId} value={person.personId}>
-                        {person.name} · {person.phoneNumber}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchCombobox
+                  value={personId}
+                  onValueChange={setPersonId}
+                  options={personOptions}
+                  placeholder="Select registered student"
+                  searchPlaceholder="Search name or student number…"
+                  emptyMessage="No matching students."
+                  disabled={registeredPeople.length === 0}
+                />
                 {registeredPeople.length === 0 && (
-                  <p className="text-xs text-muted-foreground">No app registrations yet. Ask the user to register their phone first.</p>
+                  <p className="text-xs text-muted-foreground">No app registrations yet. Ask the student to register the app first.</p>
                 )}
               </div>
 
               <div className="grid gap-2">
                 <label className="text-sm font-medium">Door / room</label>
-                <Select value={deviceId} onValueChange={setDeviceId}>
-                  <SelectTrigger className="w-full"><SelectValue placeholder="Select smart lock" /></SelectTrigger>
-                  <SelectContent>
-                    {(devices.data ?? []).map((device) => (
-                      <SelectItem key={device.deviceId} value={device.deviceId}>
-                        {device.name}{device.location ? ` · ${device.location}` : ''}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchCombobox
+                  value={deviceId}
+                  onValueChange={setDeviceId}
+                  options={deviceOptions}
+                  placeholder="Select smart lock"
+                  searchPlaceholder="Search room, lock or location…"
+                  emptyMessage="No matching smart locks."
+                  disabled={deviceOptions.length === 0}
+                />
               </div>
 
               <div className="grid gap-2">
@@ -266,13 +279,13 @@ function AccessPage() {
         <Card className="h-fit">
           <CardHeader>
             <div className="mb-2 grid size-9 place-items-center rounded-lg bg-muted"><Smartphone className="size-4" /></div>
-            <CardTitle>Phone-first identity</CardTitle>
+            <CardTitle>Student identity</CardTitle>
             <CardDescription>
-              The mobile app creates the person's identity. This dashboard only decides which locks that identity can open.
+              Students register with their name and student/computer number. This dashboard decides which locks and schedules they can use.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm text-muted-foreground">
-            <div className="flex gap-2"><Badge variant="outline">1</Badge><span>User registers full name and phone number.</span></div>
+            <div className="flex gap-2"><Badge variant="outline">1</Badge><span>Student registers their name and student/computer number.</span></div>
             <div className="flex gap-2"><Badge variant="outline">2</Badge><span>Choose the user and smart lock here.</span></div>
             <div className="flex gap-2"><Badge variant="outline">3</Badge><span>The app syncs permission automatically.</span></div>
             <div className="flex items-center gap-2 border-t pt-3 text-xs"><KeyRound className="size-4" /><span>No credential JSON needs to be copied.</span></div>
