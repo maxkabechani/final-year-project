@@ -198,9 +198,9 @@ class _AccessHomePageState extends State<AccessHomePage> {
     }
   }
 
-  Future<void> _registerPhone({
+  Future<void> _registerStudent({
     required String fullName,
-    required String phoneNumber,
+    required String studentNumber,
   }) async {
     if (_registering) return;
     final installationId = _installationId;
@@ -210,7 +210,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
     try {
       final registration = await _api.register(
         fullName: fullName.trim(),
-        phoneNumber: phoneNumber.trim(),
+        studentNumber: studentNumber.trim(),
         installationId: installationId,
         deviceLabel: await _deviceLabel(),
       );
@@ -672,7 +672,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
     if (_mobileToken == null) {
       return RegistrationPage(
         registering: _registering,
-        onRegister: _registerPhone,
+        onRegister: _registerStudent,
       );
     }
 
@@ -932,7 +932,7 @@ class RegistrationPage extends StatefulWidget {
   final bool registering;
   final Future<void> Function({
     required String fullName,
-    required String phoneNumber,
+    required String studentNumber,
   }) onRegister;
 
   @override
@@ -942,12 +942,12 @@ class RegistrationPage extends StatefulWidget {
 class _RegistrationPageState extends State<RegistrationPage> {
   final _formKey = GlobalKey<FormState>();
   final _fullName = TextEditingController();
-  final _phoneNumber = TextEditingController();
+  final _studentNumber = TextEditingController();
 
   @override
   void dispose() {
     _fullName.dispose();
-    _phoneNumber.dispose();
+    _studentNumber.dispose();
     super.dispose();
   }
 
@@ -955,7 +955,7 @@ class _RegistrationPageState extends State<RegistrationPage> {
     if (!_formKey.currentState!.validate()) return;
     await widget.onRegister(
       fullName: _fullName.text,
-      phoneNumber: _phoneNumber.text,
+      studentNumber: _studentNumber.text,
     );
   }
 
@@ -988,7 +988,7 @@ class _RegistrationPageState extends State<RegistrationPage> {
                     ),
                     const SizedBox(height: 26),
                     const Text(
-                      'Register this phone',
+                      'Register this device',
                       style: TextStyle(
                         fontSize: 30,
                         fontWeight: FontWeight.w800,
@@ -997,7 +997,7 @@ class _RegistrationPageState extends State<RegistrationPage> {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Enter your details once. An administrator will then assign the doors you are allowed to open.',
+                      'Enter your name and student/computer number once. An administrator will then assign the doors you are allowed to open.',
                       style: TextStyle(
                         height: 1.5,
                         color: Colors.black54,
@@ -1022,11 +1022,11 @@ class _RegistrationPageState extends State<RegistrationPage> {
                     ),
                     const SizedBox(height: 14),
                     TextFormField(
-                      controller: _phoneNumber,
+                      controller: _studentNumber,
                       keyboardType: TextInputType.phone,
                       textInputAction: TextInputAction.done,
                       autofillHints: const <String>[
-                        AutofillHints.telephoneNumber,
+                        AutofillHints.telestudentNumber,
                       ],
                       decoration: const InputDecoration(
                         labelText: 'Phone number',
@@ -1058,7 +1058,7 @@ class _RegistrationPageState extends State<RegistrationPage> {
                                 color: Colors.white,
                               ),
                             )
-                          : const Text('Register phone'),
+                          : const Text('Register device'),
                     ),
                     const SizedBox(height: 14),
                     const Text(
