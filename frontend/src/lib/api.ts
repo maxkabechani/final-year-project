@@ -10,7 +10,7 @@ export type Device = {
 export type Person = {
   personId: string
   name: string
-  phoneNumber: string | null
+  studentNumber: string | null
   createdAt: string
   activeLocks: number
 }
