@@ -1035,7 +1035,7 @@ class _RegistrationPageState extends State<RegistrationPage> {
                             .trim()
                             .replaceAll(RegExp(r'\s+'), '')
                             .toUpperCase();
-                        if (!RegExp(r'^[A-Z0-9._-]{4,32}.hasMatch(normalized)) {
+                        if (!RegExp(r'^[A-Z0-9._-]{4,32}$').hasMatch(normalized)) {
                           return 'Enter a valid student/computer number';
                         }
                         return null;
