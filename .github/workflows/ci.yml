@@ -21,11 +21,9 @@ on:
       - '**/*.docx'
   workflow_dispatch:
 
-# Connector-driven edits can create several commits in quick succession.
-# Keep only the newest run for a branch instead of wasting runners on stale commits.
-concurrency:
-  group: smart-access-ci-${{ github.ref }}
-  cancel-in-progress: true
+# Do not cancel an earlier component build when a later commit changes a
+# different component. The path filters below keep each run focused, so a
+# mobile build can finish while a later backend-only run executes separately.
 
 permissions:
   contents: read
