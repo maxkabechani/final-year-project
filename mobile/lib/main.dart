@@ -1035,50 +1035,10 @@ class _RegistrationPageState extends State<RegistrationPage> {
                             .trim()
                             .replaceAll(RegExp(r'\s+'), '')
                             .toUpperCase();
-                        if (!RegExp(r'^[A-Z0-9._-]{4,32}$').hasMatch(normalized)) {
-                          return 'Enter a valid student/computer number';
-                        }
-                        return null;
-                      },
-                      onFieldSubmitted: (_) => _submit(),
-                    ),
-                    const SizedBox(height: 20),
-                    FilledButton(
-                      onPressed: widget.registering ? null : _submit,
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size.fromHeight(52),
-                      ),
-                      child: widget.registering
-                          ? const SizedBox.square(
-                              dimension: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Text('Register device'),
-                    ),
-                    const SizedBox(height: 14),
-                    const Text(
-                      'Registration does not grant door access. Your administrator controls which locks you can open.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.4,
-                        color: Colors.black45,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-).hasMatch(normalized)) {
+                        final invalidCharacter = RegExp(r'[^A-Z0-9._-]');
+                        if (normalized.length < 4 ||
+                            normalized.length > 32 ||
+                            invalidCharacter.hasMatch(normalized)) {
                           return 'Enter a valid student/computer number';
                         }
                         return null;
