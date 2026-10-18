@@ -73,6 +73,7 @@ type AdminSocket = {
 };
 
 const adminSockets = new Set<AdminSocket>();
+const deviceSockets = new Map<string, Set<AdminSocket>>();
 
 function broadcast(type: string, payload: Record<string, unknown> = {}): void {
   const message = JSON.stringify({ type, ...payload });
@@ -83,6 +84,73 @@ function broadcast(type: string, payload: Record<string, unknown> = {}): void {
       adminSockets.delete(socket);
     }
   }
+}
+
+async function deviceTokenValid(deviceId: string, supplied: string): Promise<boolean> {
+  const result = await pool.query<{ token_hash: string }>(
+    'SELECT token_hash FROM devices WHERE device_id = $1',
+    [deviceId],
+  );
+  const row = result.rows[0];
+  return Boolean(row && supplied && constantTimeHexEqual(tokenHash(supplied), row.token_hash));
+}
+
+async function markDeviceSeen(deviceId: string): Promise<void> {
+  await pool.query(
+    'UPDATE devices SET last_seen_at = now() WHERE device_id = $1',
+    [deviceId],
+  );
+  broadcast('device_seen', { deviceId });
+}
+
+async function controllerSyncPayload(deviceId: string) {
+  const result = await pool.query(
+    `SELECT
+       g.person_id AS "userId",
+       p.credential_ciphertext AS ciphertext,
+       g.days_mask AS "daysMask",
+       g.start_minute AS "startMinute",
+       g.end_minute AS "endMinute",
+       g.valid_from AS "validFrom",
+       g.valid_until AS "validUntil"
+     FROM access_grants g
+     JOIN people p ON p.person_id = g.person_id
+     WHERE g.device_id = $1
+       AND g.revoked_at IS NULL
+       AND (g.valid_until IS NULL OR g.valid_until > floor(extract(epoch from now())))
+     ORDER BY g.created_at`,
+    [deviceId],
+  );
+
+  return {
+    type: 'sync',
+    serverUnixSeconds: Math.floor(Date.now() / 1000),
+    users: result.rows.map((row) => ({
+      userId: row.userId,
+      credentialKeyHex: decryptCredentialHex(row.ciphertext, masterKey),
+      schedule: {
+        daysMask: Number(row.daysMask),
+        startMinute: Number(row.startMinute),
+        endMinute: Number(row.endMinute),
+        validFrom: Number(row.validFrom),
+        validUntil: row.validUntil === null ? null : Number(row.validUntil),
+      },
+    })),
+  };
+}
+
+async function pushControllerSync(deviceId: string): Promise<void> {
+  const sockets = deviceSockets.get(deviceId);
+  if (!sockets || sockets.size === 0) return;
+  const message = JSON.stringify(await controllerSyncPayload(deviceId));
+  for (const socket of [...sockets]) {
+    if (socket.readyState === 1) {
+      socket.send(message);
+    } else {
+      sockets.delete(socket);
+    }
+  }
+  if (sockets.size === 0) deviceSockets.delete(deviceId);
 }
 
 function bearer(request: FastifyRequest): string {
@@ -126,21 +194,12 @@ async function requireDevice(
   request: FastifyRequest<{ Params: { deviceId: string } }>,
   reply: FastifyReply,
 ): Promise<boolean> {
-  const result = await pool.query<{ token_hash: string }>(
-    'SELECT token_hash FROM devices WHERE device_id = $1',
-    [request.params.deviceId],
-  );
-  const row = result.rows[0];
   const supplied = bearer(request);
-  if (!row || !constantTimeHexEqual(tokenHash(supplied), row.token_hash)) {
+  if (!(await deviceTokenValid(request.params.deviceId, supplied))) {
     await reply.code(401).send({ error: 'Device authentication failed' });
     return false;
   }
-  await pool.query(
-    'UPDATE devices SET last_seen_at = now() WHERE device_id = $1',
-    [request.params.deviceId],
-  );
-  broadcast('device_seen', { deviceId: request.params.deviceId });
+  await markDeviceSeen(request.params.deviceId);
   return true;
 }
 
@@ -278,6 +337,79 @@ app.get('/ws/admin', { websocket: true }, (rawSocket, request) => {
     socket.send(JSON.stringify({ type: 'ready' }));
   })().catch(() => socket.close());
 });
+
+app.get<{ Params: { deviceId: string } }>(
+  '/ws/device/:deviceId',
+  { websocket: true },
+  (rawSocket, request) => {
+    const socket = rawSocket as unknown as AdminSocket;
+    const deviceId = request.params.deviceId;
+    let authenticated = false;
+
+    const cleanup = () => {
+      const sockets = deviceSockets.get(deviceId);
+      sockets?.delete(socket);
+      if (sockets?.size === 0) deviceSockets.delete(deviceId);
+    };
+    socket.on('close', cleanup);
+    socket.on('error', cleanup);
+
+    socket.on('message', (rawPayload) => {
+      void (async () => {
+        const payload = typeof rawPayload === 'string'
+          ? rawPayload
+          : rawPayload.toString('utf8');
+
+        let message: unknown;
+        try {
+          message = JSON.parse(payload);
+        } catch {
+          socket.send(JSON.stringify({ type: 'error', error: 'Invalid JSON' }));
+          return;
+        }
+
+        if (!authenticated) {
+          const authMessage = z.object({
+            type: z.literal('auth'),
+            token: z.string().min(16).max(256),
+          }).safeParse(message);
+          if (!authMessage.success ||
+              !(await deviceTokenValid(deviceId, authMessage.data.token))) {
+            socket.send(JSON.stringify({ type: 'auth_error' }));
+            socket.close();
+            return;
+          }
+
+          deviceIdSchema.parse(deviceId);
+          authenticated = true;
+          const sockets = deviceSockets.get(deviceId) ?? new Set<AdminSocket>();
+          sockets.add(socket);
+          deviceSockets.set(deviceId, sockets);
+          await markDeviceSeen(deviceId);
+          socket.send(JSON.stringify(await controllerSyncPayload(deviceId)));
+          return;
+        }
+
+        const messageType = z.object({ type: z.string() }).safeParse(message);
+        if (!messageType.success) return;
+
+        if (messageType.data.type === 'heartbeat') {
+          await markDeviceSeen(deviceId);
+          socket.send(JSON.stringify({
+            type: 'heartbeat_ack',
+            serverUnixSeconds: Math.floor(Date.now() / 1000),
+          }));
+        } else if (messageType.data.type === 'sync_request') {
+          await markDeviceSeen(deviceId);
+          socket.send(JSON.stringify(await controllerSyncPayload(deviceId)));
+        }
+      })().catch((error) => {
+        app.log.error(error, `Device WebSocket failed for ${deviceId}`);
+        socket.close();
+      });
+    });
+  },
+);
 
 app.get('/', async () => ({
   service: 'Smart Lock Access API',
@@ -684,6 +816,7 @@ app.post('/api/access-grants', { preHandler: requireAdmin }, async (request, rep
 
   const grant = await upsertGrant(body);
   broadcast('access_changed', { deviceId: grant.deviceId, personId: grant.personId });
+  void pushControllerSync(grant.deviceId).catch((error) => app.log.error(error, 'Controller sync push failed'));
   return reply.code(201).send({
     grantId: grant.grantId,
     personId: grant.personId,
@@ -708,6 +841,7 @@ app.delete<{ Params: { grantId: string } }>(
     const row = result.rows[0];
     if (!row) return reply.code(404).send({ error: 'Active access grant not found' });
     broadcast('access_changed', row);
+    void pushControllerSync(row.deviceId).catch((error) => app.log.error(error, 'Controller sync push failed'));
     return reply.code(204).send();
   },
 );
@@ -727,6 +861,7 @@ app.post<{ Params: { deviceId: string } }>(
       schedule: body.schedule,
     });
     broadcast('access_changed', { deviceId: grant.deviceId, personId: grant.personId });
+  void pushControllerSync(grant.deviceId).catch((error) => app.log.error(error, 'Controller sync push failed'));
     return reply.code(201).send({
       userId: grant.personId,
       credentialKeyHex: grant.credentialKeyHex,
@@ -790,6 +925,7 @@ app.delete<{ Params: { deviceId: string; userId: string } }>(
       return reply.code(404).send({ error: 'Active access grant not found' });
     }
     broadcast('access_changed', { deviceId, personId });
+    void pushControllerSync(deviceId).catch((error) => app.log.error(error, 'Controller sync push failed'));
     return reply.code(204).send();
   },
 );
@@ -857,35 +993,10 @@ app.get<{ Params: { deviceId: string } }>(
   async (request, reply) => {
     if (!(await requireDevice(request, reply))) return;
     const deviceId = deviceIdSchema.parse(request.params.deviceId);
-    const result = await pool.query(
-      `SELECT
-       g.person_id AS "userId",
-       p.credential_ciphertext AS ciphertext,
-       g.days_mask AS "daysMask",
-       g.start_minute AS "startMinute",
-       g.end_minute AS "endMinute",
-       g.valid_from AS "validFrom",
-       g.valid_until AS "validUntil"
-       FROM access_grants g
-       JOIN people p ON p.person_id = g.person_id
-       WHERE g.device_id = $1
-         AND g.revoked_at IS NULL
-         AND (g.valid_until IS NULL OR g.valid_until > floor(extract(epoch from now())))
-       ORDER BY g.created_at`,
-      [deviceId],
-    );
+    const payload = await controllerSyncPayload(deviceId);
     return {
-      users: result.rows.map((row) => ({
-        userId: row.userId,
-        credentialKeyHex: decryptCredentialHex(row.ciphertext, masterKey),
-        schedule: {
-          daysMask: Number(row.daysMask),
-          startMinute: Number(row.startMinute),
-          endMinute: Number(row.endMinute),
-          validFrom: Number(row.validFrom),
-          validUntil: row.validUntil === null ? null : Number(row.validUntil),
-        },
-      })),
+      serverUnixSeconds: payload.serverUnixSeconds,
+      users: payload.users,
     };
   },
 );
