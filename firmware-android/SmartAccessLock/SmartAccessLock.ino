@@ -739,15 +739,24 @@ static String backendRoot(const char *path) {
 static bool backendReady() {
   return strlen(SMART_LOCK_BACKEND_URL) > 8 &&
          strlen(SMART_LOCK_DEVICE_TOKEN) > 16 &&
-         strlen(SMART_LOCK_BACKEND_ROOT_CA) > 100 &&
          WiFi.status() == WL_CONNECTED;
+}
+
+static void configureBackendTls(WiFiClientSecure &client) {
+  if (strlen(SMART_LOCK_BACKEND_ROOT_CA) > 100) {
+    client.setCACert(SMART_LOCK_BACKEND_ROOT_CA);
+  } else {
+    // Presentation-friendly fallback: keep HTTPS encryption without requiring
+    // a bundled CA certificate. Add a CA later to restore server verification.
+    client.setInsecure();
+  }
 }
 
 static bool secureGet(const String &url, String &body) {
   WiFiClientSecure client;
-  client.setCACert(SMART_LOCK_BACKEND_ROOT_CA);
+  configureBackendTls(client);
   HTTPClient http;
-  if (!http.begin(url, SMART_LOCK_BACKEND_ROOT_CA)) return false;
+  if (!http.begin(client, url)) return false;
   http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
   const int status = http.GET();
   if (status >= 200 && status < 300) body = http.getString();
@@ -757,9 +766,9 @@ static bool secureGet(const String &url, String &body) {
 
 static bool securePost(const String &url, const String &body) {
   WiFiClientSecure client;
-  client.setCACert(SMART_LOCK_BACKEND_ROOT_CA);
+  configureBackendTls(client);
   HTTPClient http;
-  if (!http.begin(url, SMART_LOCK_BACKEND_ROOT_CA)) return false;
+  if (!http.begin(client, url)) return false;
   http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
   http.addHeader("Content-Type", "application/json");
   const int status = http.POST(body);
