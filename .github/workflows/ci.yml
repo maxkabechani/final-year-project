@@ -36,7 +36,6 @@ jobs:
     outputs:
       mobile: ${{ steps.filter.outputs.mobile }}
       firmware: ${{ steps.filter.outputs.firmware }}
-      arduino: ${{ steps.filter.outputs.arduino }}
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
@@ -48,64 +47,7 @@ jobs:
             mobile:
               - 'mobile/**'
             firmware:
-              - 'firmware/**'
-            arduino:
-              - 'firmware-android/SmartAccessLock/**'
-            backend:
-              - 'backend/**'
-              - 'docker-compose.yml'
-            frontend:
-              - 'frontend/**'
-              - 'docker-compose.yml'
-
-  android:
-    name: Android app and APK
-    concurrency:
-      group: smart-access-android-${{ github.ref }}
-      cancel-in-progress: true
-    needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.mobile == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-      - name: Generate Android project files
-        working-directory: mobile
-        run: flutter create --platforms=android --org dev.maxkabechani --project-name smart_access .
-      - name: Add Android permissions
-        working-directory: mobile
-        run: python3 tool/prepare_android.py
-      - name: Resolve Flutter packages
-        working-directory: mobile
-        run: flutter pub get
-      - name: Analyze and test
-        working-directory: mobile
-        run: |
-          dart format lib test
-          flutter analyze --no-pub --no-fatal-infos
-          flutter test --no-pub
-      - name: Build Smart Access APK
-        working-directory: mobile
-        run: |
-          flutter build apk --debug --no-pub --dart-define=API_BASE_URL=https://api-project.maxkabechani.dev
-          cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/Smart-Access.apk
-      - name: Upload Smart Access APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Smart-Access-APK
-          path: mobile/build/app/outputs/flutter-apk/Smart-Access.apk
-          if-no-files-found: error
-          retention-days: 30
-
-  firmware:
-    name: Smart lock firmware compile
+    name: ESP32 firmware and binary
     concurrency:
       group: smart-access-firmware-${{ github.ref }}
       cancel-in-progress: true
@@ -114,42 +56,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: python -m pip install platformio
-      - run: pio run -d firmware
-
-  arduino_firmware:
-    name: ArduinoDroid sketch compile
-    concurrency:
-      group: smart-access-arduino-${{ github.ref }}
-      cancel-in-progress: true
-    needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.arduino == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: arduino/setup-arduino-cli@v2
-      - name: Install ESP32 core and libraries
+      - name: Install ESP32 core and firmware libraries
         run: |
           arduino-cli config init
           arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
           arduino-cli core update-index
           arduino-cli core install esp32:esp32@2.0.17
           arduino-cli lib install "ArduinoJson@7.4.2"
-      - name: Compile Android-ready sketch
+          arduino-cli lib install "WebSockets@2.7.3"
+      - name: Compile canonical Smart Access firmware
         run: |
-          mkdir -p firmware-android/build
+          mkdir -p firmware/build
           arduino-cli compile \
-            --fqbn esp32:esp32:esp32 \
-            --output-dir firmware-android/build \
-            firmware-android/SmartAccessLock
+            --fqbn esp32:esp32:esp32:PartitionScheme=huge_app \
+            --output-dir firmware/build \
+            firmware/SmartAccessLock
       - name: Upload compiled ESP32 firmware
         uses: actions/upload-artifact@v4
         with:
           name: Smart-Access-ESP32-Firmware
-          path: firmware-android/build/
+          path: firmware/build/
           if-no-files-found: error
           retention-days: 30
 
