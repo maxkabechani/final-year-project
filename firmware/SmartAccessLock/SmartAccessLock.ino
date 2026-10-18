@@ -901,6 +901,40 @@ static void startBackendWebSocket() {
                 host.c_str(), static_cast<unsigned>(port), path.c_str());
 }
 
+static bool securePost(const String &url, const String &body) {
+  for (uint8_t attempt = 1; attempt <= 2; ++attempt) {
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(8000);
+    HTTPClient http;
+    http.setConnectTimeout(8000);
+    http.setTimeout(8000);
+    if (!http.begin(client, url)) {
+      Serial.printf("HTTPS POST setup failed: %s\n", url.c_str());
+      return false;
+    }
+    http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
+    http.addHeader("Content-Type", "application/json");
+    const int status = http.POST(body);
+    if (status >= 200 && status < 300) {
+      http.end();
+      return true;
+    }
+    if (status < 0) {
+      Serial.printf("Backend POST failed: %s (attempt %u/2, %s)\n",
+                    HTTPClient::errorToString(status).c_str(),
+                    static_cast<unsigned>(attempt), url.c_str());
+    } else {
+      Serial.printf("Backend POST failed: HTTP %d (attempt %u/2, %s)\n",
+                    status, static_cast<unsigned>(attempt), url.c_str());
+    }
+    http.end();
+    if (status >= 400 && status < 500) return false;
+    if (attempt < 2) delay(300);
+  }
+  return false;
+}
+
 static void formatIsoUtc(uint32_t timestamp, char output[21]) {
   const time_t seconds = static_cast<time_t>(timestamp);
   struct tm utcTime;
