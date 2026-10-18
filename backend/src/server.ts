@@ -477,7 +477,7 @@ app.get('/api/devices', { preHandler: requireAdmin }, async () => {
        location,
        created_at AS "createdAt",
        last_seen_at AS "lastSeenAt",
-       (last_seen_at IS NOT NULL AND last_seen_at > now() - interval '90 seconds') AS online
+       (last_seen_at IS NOT NULL AND last_seen_at > now() - interval '150 seconds') AS online
      FROM devices
      ORDER BY created_at DESC`,
   );
@@ -757,6 +757,7 @@ app.get<{ Params: { deviceId: string } }>(
       [deviceId],
     );
     return {
+      serverUnixSeconds: Math.floor(Date.now() / 1000),
       users: result.rows.map((row) => ({
         userId: row.userId,
         name: row.name,
