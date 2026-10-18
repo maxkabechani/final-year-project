@@ -39,13 +39,13 @@ export async function initializeDatabase(): Promise<void> {
     `CREATE TABLE IF NOT EXISTS people (
       person_id UUID PRIMARY KEY,
       name TEXT NOT NULL,
-      phone_number TEXT,
+      student_number TEXT,
       credential_ciphertext TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
-    `ALTER TABLE people ADD COLUMN IF NOT EXISTS phone_number TEXT`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS people_phone_number_unique
-      ON people(phone_number) WHERE phone_number IS NOT NULL`,
+    `ALTER TABLE people ADD COLUMN IF NOT EXISTS student_number TEXT`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS people_student_number_unique
+      ON people(student_number) WHERE student_number IS NOT NULL`,
     `CREATE TABLE IF NOT EXISTS mobile_sessions (
       session_id UUID PRIMARY KEY,
       person_id UUID NOT NULL REFERENCES people(person_id) ON DELETE CASCADE,
