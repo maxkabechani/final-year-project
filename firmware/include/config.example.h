@@ -24,12 +24,6 @@
 #define SMART_LOCK_PAIRING_PIN "246810"
 #endif
 
-// Optional: paste the trusted root CA certificate for the backend HTTPS host.
-// If left empty, the controller still uses HTTPS but skips certificate
-// verification. Configure a CA for a production deployment.
-#ifndef SMART_LOCK_BACKEND_ROOT_CA
-#define SMART_LOCK_BACKEND_ROOT_CA ""
-#endif
 
 // Hardware fitted on the final presentation controller.
 #ifndef SMART_LOCK_PIN_RELAY
