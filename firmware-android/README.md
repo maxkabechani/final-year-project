@@ -42,8 +42,7 @@ For the full dashboard-to-lock flow, edit the configuration block at the top of 
 
 - Wi-Fi SSID/password
 - controller token from the dashboard
-- backend root CA certificate
 
-The backend URL is already set to `https://api-project.maxkabechani.dev`.
+The backend URL is already set to `https://api-project.maxkabechani.dev`. The controller uses HTTPS directly; there is no CA certificate field to configure.
 
 The controller must sync grants/time from the backend before the current simplified mobile app can perform an authorized offline BLE unlock.
