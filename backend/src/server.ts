@@ -416,10 +416,15 @@ app.get<{ Params: { deviceId: string } }>(
 
 app.get('/', async () => ({
   service: 'Smart Lock Access API',
-  version: '0.3.0',
+  version: '0.4.0',
   health: '/health',
+  controllerWebSocket: '/ws/device/:deviceId',
 }));
-app.get('/health', async () => ({ ok: true }));
+app.get('/health', async () => ({
+  ok: true,
+  version: '0.4.0',
+  controllerWebSocket: true,
+}));
 
 app.post('/api/mobile/register', async (request, reply) => {
   const body = z.object({
@@ -1060,6 +1065,10 @@ app.post<{ Params: { deviceId: string } }>(
 
 app.addHook('onClose', async () => {
   for (const socket of adminSockets) socket.close();
+  for (const sockets of deviceSockets.values()) {
+    for (const socket of sockets) socket.close();
+  }
+  deviceSockets.clear();
   await closeDatabase();
 });
 
