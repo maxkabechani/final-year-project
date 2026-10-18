@@ -87,6 +87,7 @@ bool lockoutActive = false;
 uint32_t lockoutExpiresAt = 0;
 uint32_t unlockUntil = 0;
 uint32_t lastSyncAt = 0;
+uint32_t lastWifiReconnectAt = 0;
 bool serverTimeSyncedThisBoot = false;
 int lastWifiStatus = -1;
 
@@ -664,40 +665,71 @@ static bool backendReady() {
 }
 
 static bool secureGet(const String &url, String &body) {
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  if (!http.begin(client, url)) {
-    Serial.printf("HTTPS GET setup failed: %s\n", url.c_str());
-    return false;
+  for (uint8_t attempt = 1; attempt <= 2; ++attempt) {
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(8000);
+    HTTPClient http;
+    http.setConnectTimeout(8000);
+    http.setTimeout(8000);
+    if (!http.begin(client, url)) {
+      Serial.printf("HTTPS GET setup failed: %s\n", url.c_str());
+      return false;
+    }
+    http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
+    const int status = http.GET();
+    if (status >= 200 && status < 300) {
+      body = http.getString();
+      http.end();
+      return true;
+    }
+    if (status < 0) {
+      Serial.printf("Backend GET failed: %s (attempt %u/2, %s)\n",
+                    HTTPClient::errorToString(status).c_str(),
+                    static_cast<unsigned>(attempt), url.c_str());
+    } else {
+      Serial.printf("Backend GET failed: HTTP %d (attempt %u/2, %s)\n",
+                    status, static_cast<unsigned>(attempt), url.c_str());
+    }
+    http.end();
+    if (status >= 400 && status < 500) return false;
+    if (attempt < 2) delay(300);
   }
-  http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
-  const int status = http.GET();
-  if (status >= 200 && status < 300) {
-    body = http.getString();
-  } else {
-    Serial.printf("Backend GET failed: HTTP %d (%s)\n", status, url.c_str());
-  }
-  http.end();
-  return status >= 200 && status < 300;
+  return false;
 }
 
 static bool securePost(const String &url, const String &body) {
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  if (!http.begin(client, url)) {
-    Serial.printf("HTTPS POST setup failed: %s\n", url.c_str());
-    return false;
+  for (uint8_t attempt = 1; attempt <= 2; ++attempt) {
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setTimeout(8000);
+    HTTPClient http;
+    http.setConnectTimeout(8000);
+    http.setTimeout(8000);
+    if (!http.begin(client, url)) {
+      Serial.printf("HTTPS POST setup failed: %s\n", url.c_str());
+      return false;
+    }
+    http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
+    http.addHeader("Content-Type", "application/json");
+    const int status = http.POST(body);
+    if (status >= 200 && status < 300) {
+      http.end();
+      return true;
+    }
+    if (status < 0) {
+      Serial.printf("Backend POST failed: %s (attempt %u/2, %s)\n",
+                    HTTPClient::errorToString(status).c_str(),
+                    static_cast<unsigned>(attempt), url.c_str());
+    } else {
+      Serial.printf("Backend POST failed: HTTP %d (attempt %u/2, %s)\n",
+                    status, static_cast<unsigned>(attempt), url.c_str());
+    }
+    http.end();
+    if (status >= 400 && status < 500) return false;
+    if (attempt < 2) delay(300);
   }
-  http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
-  http.addHeader("Content-Type", "application/json");
-  const int status = http.POST(body);
-  if (status < 200 || status >= 300) {
-    Serial.printf("Backend POST failed: HTTP %d (%s)\n", status, url.c_str());
-  }
-  http.end();
-  return status >= 200 && status < 300;
+  return false;
 }
 
 static bool syncClock() {
@@ -712,12 +744,18 @@ static bool syncClock() {
   return true;
 }
 
-static bool syncUsers() {
+static bool syncUsers(bool &timeSynced) {
+  timeSynced = false;
   String body;
   const String path = "/api/devices/" + String(SMART_LOCK_DEVICE_ID) + "/sync";
   if (!secureGet(backendRoot(path.c_str()), body)) return false;
   JsonDocument document;
   if (deserializeJson(document, body) != DeserializationError::Ok) return false;
+  const uint32_t unixSeconds = document["serverUnixSeconds"] | 0U;
+  if (unixSeconds >= 1700000000U) {
+    setSoftwareClock(unixSeconds);
+    timeSynced = true;
+  }
   JsonArray array = document["users"].as<JsonArray>();
   if (array.isNull() || array.size() > kMaxUsers) return false;
   std::vector<UserRecord> updated;
@@ -789,8 +827,8 @@ static bool syncEvents() {
 
 static void syncBackend() {
   if (!backendReady()) return;
-  const bool timeSynced = syncClock();
-  const bool usersSynced = syncUsers();
+  bool timeSynced = false;
+  const bool usersSynced = syncUsers(timeSynced);
   const bool eventsSynced = syncEvents();
   if (timeSynced) serverTimeSyncedThisBoot = true;
   Serial.printf("Backend sync: time=%d users=%d events=%d\n",
@@ -834,6 +872,8 @@ void setup() {
   if (strlen(SMART_LOCK_WIFI_SSID) > 0) {
     Serial.printf("Wi-Fi connecting to %s...\n", SMART_LOCK_WIFI_SSID);
     WiFi.mode(WIFI_STA);
+    WiFi.persistent(false);
+    WiFi.setAutoReconnect(true);
     WiFi.setSleep(false);
     WiFi.begin(SMART_LOCK_WIFI_SSID, SMART_LOCK_WIFI_PASSWORD);
   } else {
@@ -896,11 +936,16 @@ void loop() {
     }
   }
   if (wifiStatus == WL_CONNECTED) {
-    const uint32_t syncIntervalMs = serverTimeSyncedThisBoot ? 60000U : 5000U;
+    const uint32_t syncIntervalMs = serverTimeSyncedThisBoot ? 30000U : 5000U;
     if (static_cast<uint32_t>(millis() - lastSyncAt) >= syncIntervalMs) {
       lastSyncAt = millis();
       syncBackend();
     }
+  } else if (strlen(SMART_LOCK_WIFI_SSID) > 0 &&
+             static_cast<uint32_t>(millis() - lastWifiReconnectAt) >= 10000U) {
+    lastWifiReconnectAt = millis();
+    Serial.println("Wi-Fi reconnect requested.");
+    WiFi.reconnect();
   }
   delay(8);
 }
