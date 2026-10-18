@@ -42,7 +42,9 @@ https://github.com/maxkabechani/final-year-project/releases/latest/download/Smar
 The dashboard's **Download app** button and QR code both use this public download URL;
 phones do not need a dashboard or GitHub login to download it. The APK is the project's
 debug/demo build. Android may require allowing installation from the browser.
-Pull requests do not publish releases. To publish manually, run **Smart Access CI**
+Pull requests do not publish releases. Web-only changes reuse an unexpired APK only
+after verifying that its mobile source matches the current mobile source.
+To publish manually, run **Smart Access CI**
 with **Run workflow** on `main`. The link becomes available after the first successful
 **Publish Android download** job. Dokploy only needs to redeploy the frontend for the
 download card; the APK itself is hosted by GitHub.

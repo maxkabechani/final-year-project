@@ -42,7 +42,6 @@ jobs:
           filters: |
             mobile:
               - 'mobile/**'
-              - '.github/workflows/ci.yml'
             firmware:
               - 'firmware/**'
             backend:
@@ -100,28 +99,51 @@ jobs:
 
   publish-android:
     name: Publish Android download
-    needs: android
-    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    needs: [changes, android]
+    if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (needs.android.result == 'success' || (needs.android.result == 'skipped' && needs.changes.outputs.mobile == 'false')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     concurrency:
       group: smart-access-android-release
       cancel-in-progress: false
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: Smart-Access-APK
-          path: apk
-      - name: Publish APK for the dashboard download and QR code
+          fetch-depth: 0
+      - name: Retrieve a successful APK matching the mobile source
+        id: apk
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          tag="android-${GITHUB_SHA}"
+          mkdir -p apk
+          gh api --paginate "repos/${GH_REPO}/actions/artifacts?name=Smart-Access-APK&per_page=100" \
+            --jq '.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main") | [.id, .workflow_run.head_sha] | @tsv' > candidates.tsv
+          while IFS=$'\t' read -r artifact_id source_sha; do
+            if git cat-file -e "${source_sha}^{commit}" 2>/dev/null && \
+              git diff --quiet "$source_sha" "$GITHUB_SHA" -- mobile; then
+              gh api "repos/${GH_REPO}/actions/artifacts/${artifact_id}/zip" > apk.zip
+              unzip -q apk.zip -d apk
+              test -s apk/Smart-Access.apk
+              echo "source_sha=${source_sha}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done < candidates.tsv
+          echo '::error::No unexpired APK matches the current mobile source. Run Smart Access CI on main to build one.'
+          exit 1
+      - name: Publish APK for the dashboard download and QR code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          APK_SOURCE_SHA: ${{ steps.apk.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          tag="android-${APK_SOURCE_SHA}"
           cat > release-notes.md <<EOF
-          Smart Access Android demo APK built from commit ${GITHUB_SHA}.
+          Smart Access Android demo APK built from commit ${APK_SOURCE_SHA}.
 
           Download Smart-Access.apk on your Android phone. This is the debug build used for the project demonstration.
           EOF
@@ -130,7 +152,7 @@ jobs:
             gh release edit "$tag" --latest --notes-file release-notes.md
           else
             gh release create "$tag" apk/Smart-Access.apk \
-              --target "$GITHUB_SHA" --latest \
+              --target "$APK_SOURCE_SHA" --latest \
               --title "Smart Access Android" --notes-file release-notes.md
           fi
 
