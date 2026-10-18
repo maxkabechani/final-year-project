@@ -23,14 +23,14 @@ const port = Number(process.env.PORT ?? '8080');
 
 const deviceIdSchema = z.string().min(3).max(40).regex(/^[A-Za-z0-9._-]+$/);
 const fullNameSchema = z.string().trim().min(2).max(120);
-const phoneNumberSchema = z.string().trim().min(8).max(24);
+const studentNumberSchema = z.string().trim().min(4).max(32);
 
-function normalizePhoneNumber(value: string): string {
-  const compact = value.replace(/[\s()-]/g, '');
-  if (!/^\+?[0-9]{8,16}$/.test(compact)) {
-    throw Object.assign(new Error('Enter a valid phone number'), { statusCode: 400 });
+function normalizeStudentNumber(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, '').toUpperCase();
+  if (!/^[A-Z0-9._-]{4,32}$/.test(normalized)) {
+    throw Object.assign(new Error('Enter a valid student/computer number'), { statusCode: 400 });
   }
-  return compact;
+  return normalized;
 }
 const accessTypeSchema = z.enum(['recurring', 'one_off']);
 const scheduleSchema = z.object({
@@ -206,25 +206,25 @@ async function requireDevice(
 async function requireMobile(request: FastifyRequest, reply: FastifyReply): Promise<{
   personId: string;
   name: string;
-  phoneNumber: string;
+  studentNumber: string | null;
   credentialCiphertext: string;
 } | null> {
   const supplied = bearer(request);
   if (!supplied) {
-    await reply.code(401).send({ error: 'Phone registration required' });
+    await reply.code(401).send({ error: 'Student registration required' });
     return null;
   }
 
   const result = await pool.query<{
     personId: string;
     name: string;
-    phoneNumber: string;
+    studentNumber: string | null;
     credentialCiphertext: string;
   }>(
     `SELECT
        p.person_id AS "personId",
        p.name,
-       p.phone_number AS "phoneNumber",
+       p.student_number AS "studentNumber",
        p.credential_ciphertext AS "credentialCiphertext"
      FROM mobile_sessions s
      JOIN people p ON p.person_id = s.person_id
@@ -233,7 +233,7 @@ async function requireMobile(request: FastifyRequest, reply: FastifyReply): Prom
   );
   const row = result.rows[0];
   if (!row) {
-    await reply.code(401).send({ error: 'Phone registration is no longer valid' });
+    await reply.code(401).send({ error: 'Student registration is no longer valid' });
     return null;
   }
 
@@ -345,11 +345,13 @@ app.get<{ Params: { deviceId: string } }>(
     const socket = rawSocket as unknown as AdminSocket;
     const deviceId = request.params.deviceId;
     let authenticated = false;
+    app.log.info({ deviceId }, 'Controller WebSocket transport connected');
 
     const cleanup = () => {
       const sockets = deviceSockets.get(deviceId);
       sockets?.delete(socket);
       if (sockets?.size === 0) deviceSockets.delete(deviceId);
+      app.log.info({ deviceId, authenticated }, 'Controller WebSocket disconnected');
     };
     socket.on('close', cleanup);
     socket.on('error', cleanup);
@@ -386,6 +388,7 @@ app.get<{ Params: { deviceId: string } }>(
           sockets.add(socket);
           deviceSockets.set(deviceId, sockets);
           await markDeviceSeen(deviceId);
+          app.log.info({ deviceId }, 'Controller WebSocket authenticated');
           socket.send(JSON.stringify(await controllerSyncPayload(deviceId)));
           return;
         }
@@ -421,24 +424,24 @@ app.get('/health', async () => ({ ok: true }));
 app.post('/api/mobile/register', async (request, reply) => {
   const body = z.object({
     fullName: fullNameSchema,
-    phoneNumber: phoneNumberSchema,
+    studentNumber: studentNumberSchema,
     installationId: z.string().uuid(),
     deviceLabel: z.string().trim().max(120).default('Android phone'),
   }).parse(request.body);
 
-  const phoneNumber = normalizePhoneNumber(body.phoneNumber);
+  const studentNumber = normalizeStudentNumber(body.studentNumber);
   const mobileToken = newMobileToken();
   const mobileTokenHash = tokenHash(mobileToken);
 
   const existingInstallation = await pool.query<{
     personId: string;
     name: string;
-    phoneNumber: string;
+    studentNumber: string | null;
   }>(
     `SELECT
        p.person_id AS "personId",
        p.name,
-       p.phone_number AS "phoneNumber"
+       p.student_number AS "studentNumber"
      FROM mobile_sessions s
      JOIN people p ON p.person_id = s.person_id
      WHERE s.installation_id = $1`,
@@ -447,9 +450,9 @@ app.post('/api/mobile/register', async (request, reply) => {
 
   if (existingInstallation.rows[0]) {
     const existing = existingInstallation.rows[0];
-    if (existing.phoneNumber !== phoneNumber) {
+    if (existing.studentNumber !== studentNumber) {
       return reply.code(409).send({
-        error: 'This phone is already registered to a different phone number',
+        error: 'This phone is already registered to a different student number',
       });
     }
     await pool.query(
@@ -468,18 +471,18 @@ app.post('/api/mobile/register', async (request, reply) => {
       person: {
         personId: existing.personId,
         fullName: body.fullName,
-        phoneNumber,
+        studentNumber,
       },
     });
   }
 
-  const existingPhone = await pool.query<{ personId: string }>(
-    'SELECT person_id AS "personId" FROM people WHERE phone_number = $1',
-    [phoneNumber],
+  const existingStudent = await pool.query<{ personId: string }>(
+    'SELECT person_id AS "personId" FROM people WHERE student_number = $1',
+    [studentNumber],
   );
-  if (existingPhone.rows[0]) {
+  if (existingStudent.rows[0]) {
     return reply.code(409).send({
-      error: 'This phone number is already registered. Ask an administrator to help re-register the phone.',
+      error: 'This student number is already registered. Ask an administrator to help re-register the phone.',
     });
   }
 
@@ -489,12 +492,12 @@ app.post('/api/mobile/register', async (request, reply) => {
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO people(person_id, name, phone_number, credential_ciphertext)
+      `INSERT INTO people(person_id, name, student_number, credential_ciphertext)
        VALUES($1, $2, $3, $4)`,
       [
         personId,
         body.fullName,
-        phoneNumber,
+        studentNumber,
         encryptCredentialHex(credentialKeyHex, masterKey),
       ],
     );
@@ -552,7 +555,7 @@ app.get('/api/mobile/access', async (request, reply) => {
     person: {
       personId: mobile.personId,
       fullName: mobile.name,
-      phoneNumber: mobile.phoneNumber,
+      studentNumber: mobile.studentNumber,
     },
     credentialKeyHex: decryptCredentialHex(mobile.credentialCiphertext, masterKey),
     serverUnixSeconds: Math.floor(Date.now() / 1000),
@@ -639,7 +642,7 @@ app.get('/api/people', { preHandler: requireAdmin }, async () => {
     `SELECT
        p.person_id AS "personId",
        p.name,
-       p.phone_number AS "phoneNumber",
+       p.student_number AS "studentNumber",
        p.created_at AS "createdAt",
        COUNT(g.grant_id) FILTER (WHERE g.revoked_at IS NULL)::int AS "activeLocks"
      FROM people p
@@ -653,16 +656,16 @@ app.get('/api/people', { preHandler: requireAdmin }, async () => {
 app.post('/api/people', { preHandler: requireAdmin }, async (request, reply) => {
   const body = z.object({
     name: fullNameSchema,
-    phoneNumber: phoneNumberSchema.optional(),
+    studentNumber: studentNumberSchema.optional(),
   }).parse(request.body);
   const personId = randomUUID();
   const credentialKeyHex = newCredential().toString('hex');
   await pool.query(
-    'INSERT INTO people(person_id, name, phone_number, credential_ciphertext) VALUES($1, $2, $3, $4)',
+    'INSERT INTO people(person_id, name, student_number, credential_ciphertext) VALUES($1, $2, $3, $4)',
     [
       personId,
       body.name,
-      body.phoneNumber ? normalizePhoneNumber(body.phoneNumber) : null,
+      body.studentNumber ? normalizeStudentNumber(body.studentNumber) : null,
       encryptCredentialHex(credentialKeyHex, masterKey),
     ],
   );
