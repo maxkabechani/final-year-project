@@ -1,50 +1,52 @@
 # Smart Access ESP32 firmware
 
-The final presentation controller uses only:
+There is now one controller firmware source in the repository:
 
-- ESP32-32S
-- active-low relay on GPIO 33
-- active buzzer on GPIO 14
-- common-cathode RGB LED on GPIO 27 / 26 / 25
-- BLE phone access
+`firmware/SmartAccessLock/SmartAccessLock.ino`
 
-There is no LCD, physical RTC, reed sensor or exit-button dependency in the current firmware.
+Use this same sketch from Arduino IDE, ArduinoDroid, or the GitHub Actions firmware build.
 
-## Easiest upload from Android
-
-Use the single-file ArduinoDroid sketch:
-
-`../firmware-android/SmartAccessLock/SmartAccessLock.ino`
-
-It puts all editable settings at the top of one file.
+## Arduino setup
 
 Install:
 
-- `NimBLE-Arduino`
-- `ArduinoJson`
+- ESP32 board support by Espressif (CI uses 2.0.17)
+- ArduinoJson 7.4.2
+- WebSockets 2.7.3 by Markus Sattler
 
-Select **ESP32 Dev Module**, connect using USB OTG, compile and upload.
+Select **ESP32 Dev Module** and **Huge APP (3MB No OTA / 1MB SPIFFS)**, then compile and upload.
 
-## PlatformIO build
+The editable controller settings are at the top of the sketch:
 
-The canonical PlatformIO source remains in this folder.
+- controller ID
+- pairing PIN
+- Wi-Fi SSID/password
+- backend URL
+- controller token
 
-```bash
-pio run -d firmware
-pio run -d firmware -t upload
-pio device monitor -b 115200
-```
+No backend CA certificate is required by this project firmware.
 
-For PlatformIO, copy `include/config.example.h` to `include/smart_lock_local_config.h` and set the controller configuration there.
+## Backend synchronization
 
-## Behaviour
+BLE unlocking remains offline-first. Cached users, schedules and the last synchronized software clock remain usable when Wi-Fi or the backend is unavailable.
+
+When Wi-Fi is available, the controller opens one secure WebSocket connection to:
+
+`wss://<backend>/ws/device/<controller-id>`
+
+The controller authenticates once after the WebSocket connects. The backend immediately sends the current server time and access grants. When an administrator changes a grant, the backend pushes a fresh sync over the existing WebSocket instead of waiting for a polling interval.
+
+The controller sends a small heartbeat every 30 seconds over the same WebSocket. The heartbeat keeps dashboard presence current without repeatedly creating HTTPS requests or TLS handshakes. If Wi-Fi or the socket drops, it reconnects automatically and receives a full sync again.
+
+Audit events remain queued locally and are uploaded over HTTPS only when there are events waiting.
+
+## Hardware behavior
 
 - BLE name: `LOCK-<device-id>`
-- 120-second pairing window automatically opens after boot.
-- Valid unlock pulses the relay for five seconds.
-- Green indicates success, red denial and blue ready/pairing state.
-- Up to 48 access credentials are cached in NVS.
-- Up to 24 audit events are queued in NVS.
-- Recurring and one-off access windows are checked locally.
-- Backend synchronization is optional for the initial BLE demo.
-- When Wi-Fi is configured, the controller synchronizes time, access grants and audit events with the Fastify API.
+- Relay: GPIO 33, active-high on the final relay module
+- Buzzer: GPIO 14
+- Common-cathode RGB LED: GPIO 27 / 26 / 25
+- Pairing window: 120 seconds after boot
+- Unlock pulse: five seconds
+- Up to 48 access credentials cached in NVS
+- Up to 24 audit events queued in NVS
