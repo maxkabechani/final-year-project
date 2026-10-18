@@ -521,7 +521,7 @@ app.post('/api/mobile/register', async (request, reply) => {
     person: {
       personId,
       fullName: body.fullName,
-      phoneNumber,
+      studentNumber,
     },
   });
 });
