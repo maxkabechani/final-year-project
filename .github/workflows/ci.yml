@@ -21,10 +21,6 @@ on:
       - '**/*.docx'
   workflow_dispatch:
 
-# Concurrency is scoped per component job below. A newer mobile change can
-# cancel a stale mobile build, but a backend-only push cannot cancel an APK
-# build that is already running.
-
 permissions:
   contents: read
   pull-requests: read
@@ -47,6 +43,61 @@ jobs:
             mobile:
               - 'mobile/**'
             firmware:
+              - 'firmware/**'
+            backend:
+              - 'backend/**'
+              - 'docker-compose.yml'
+            frontend:
+              - 'frontend/**'
+              - 'docker-compose.yml'
+
+  android:
+    name: Android app and APK
+    concurrency:
+      group: smart-access-android-${{ github.ref }}
+      cancel-in-progress: true
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.mobile == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Generate Android project files
+        working-directory: mobile
+        run: flutter create --platforms=android --org dev.maxkabechani --project-name smart_access .
+      - name: Add Android permissions
+        working-directory: mobile
+        run: python3 tool/prepare_android.py
+      - name: Resolve Flutter packages
+        working-directory: mobile
+        run: flutter pub get
+      - name: Analyze and test
+        working-directory: mobile
+        run: |
+          dart format lib test
+          flutter analyze --no-pub --no-fatal-infos
+          flutter test --no-pub
+      - name: Build Smart Access APK
+        working-directory: mobile
+        run: |
+          flutter build apk --debug --no-pub --dart-define=API_BASE_URL=https://api-project.maxkabechani.dev
+          cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/Smart-Access.apk
+      - name: Upload Smart Access APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Smart-Access-APK
+          path: mobile/build/app/outputs/flutter-apk/Smart-Access.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  firmware:
     name: ESP32 firmware and binary
     concurrency:
       group: smart-access-firmware-${{ github.ref }}
