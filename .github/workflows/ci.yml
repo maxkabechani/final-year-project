@@ -115,7 +115,7 @@ jobs:
           arduino-cli core update-index
           arduino-cli core install esp32:esp32@2.0.17
           arduino-cli lib install "ArduinoJson@7.4.2"
-          arduino-cli lib install "WebSockets@2.7.3"
+          arduino-cli lib install "WebSockets"
       - name: Compile canonical Smart Access firmware
         run: |
           mkdir -p firmware/build
