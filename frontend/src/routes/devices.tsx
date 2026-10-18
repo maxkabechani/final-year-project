@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { Copy, DoorOpen, MoreHorizontal, Plus, ShieldCheck } from 'lucide-react'
+import { Bluetooth, Copy, DoorOpen, MoreHorizontal, Plus, ShieldCheck } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 import { DataTable } from '@/components/DataTable'
@@ -13,7 +13,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Input } from '@/components/ui/input'
 import type { Device } from '@/lib/api'
 import { useAdminConfig } from '@/lib/config'
-import { useDevices, useRegisterDevice } from '@/lib/queries'
+import { useDevices, useEnablePairing, useRegisterDevice } from '@/lib/queries'
 
 export const Route = createFileRoute('/devices')({
   head: () => ({
@@ -32,6 +32,7 @@ function DevicesPage() {
   const { configured } = useAdminConfig()
   const devices = useDevices()
   const register = useRegisterDevice()
+  const pairing = useEnablePairing()
   const [deviceId, setDeviceId] = useState('front-door-01')
   const [name, setName] = useState('Front Door')
   const [location, setLocation] = useState('Main Building')
@@ -85,7 +86,19 @@ function DevicesPage() {
       header: '',
       enableSorting: false,
       cell: ({ row }) => (
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!row.original.online || pairing.isPending}
+            title={row.original.online ? 'Open pairing for two minutes' : 'Connect the controller to Wi-Fi to enable pairing'}
+            aria-label={`Enable pairing for ${row.original.name}`}
+            onClick={() => pairing.mutate(row.original.deviceId)}
+          >
+            <Bluetooth />
+            {pairing.isPending && pairing.variables === row.original.deviceId ? 'Enabling…' : 'Enable pairing'}
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button type="button" variant="ghost" size="icon-sm" aria-label="Smart lock actions"><MoreHorizontal /></Button>
@@ -104,7 +117,7 @@ function DevicesPage() {
         </div>
       ),
     },
-  ], [])
+  ], [pairing.isPending, pairing.mutate, pairing.variables])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()

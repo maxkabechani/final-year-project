@@ -40,6 +40,19 @@ The controller sends a small heartbeat every 30 seconds over the same WebSocket.
 
 Audit events remain queued locally and are uploaded over HTTPS only when there are events waiting.
 
+## Reopen phone pairing
+
+In the dashboard, open **Smart locks** and click **Enable pairing** beside an online
+controller. An administrator session is required. The backend sends an authenticated
+WebSocket command and waits for the controller to confirm that its two-minute pairing
+window is open. Use the configured six-digit pairing PIN in the Android app.
+No controller restart is needed. Existing enrolled phones continue working after
+pairing closes. Pairing lockout after repeated incorrect PINs remains enforced.
+
+Deploy the updated API and dashboard and flash this firmware to use the action.
+Older firmware does not acknowledge the command; the dashboard reports an error
+instead of claiming that pairing is enabled. Offline requests are rejected, not queued.
+
 ## Hardware behavior
 
 - BLE name: `LOCK-<device-id>`

@@ -74,6 +74,18 @@ export function useUsers(deviceId: string) {
   })
 }
 
+export function useEnablePairing() {
+  const { config } = useAdminConfig()
+  return useMutation({
+    mutationFn: (deviceId: string) =>
+      apiRequest<{ deviceId: string; expiresInSeconds: number }>(
+        config, `/api/devices/${encodeURIComponent(deviceId)}/pairing`, { method: 'POST' },
+      ),
+    onSuccess: () => toast.success('Pairing enabled for 2 minutes. Use the lock’s pairing PIN in the Android app.'),
+    onError: (error) => toast.error(error.message),
+  })
+}
+
 export function useRegisterDevice() {
   const { config } = useAdminConfig()
   const queryClient = useQueryClient()

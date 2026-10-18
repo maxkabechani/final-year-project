@@ -17,6 +17,7 @@ The API listens on port 8080 by default.
 
 - `POST /api/devices`: register a controller and return its one-time device token.
 - `GET /api/devices`: list controllers.
+- `POST /api/devices/:deviceId/pairing`: administrator session required; reopen BLE pairing for 120 seconds on a connected controller. Success is returned only after the controller acknowledges the command. Offline, busy, locked-out, and unresponsive controllers return HTTP 409.
 - `POST /api/devices/:deviceId/users`: issue a credential and timetable.
 - `GET /api/devices/:deviceId/users`: list active users.
 - `DELETE /api/devices/:deviceId/users/:userId`: revoke a user.

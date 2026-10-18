@@ -865,6 +865,8 @@ static void sendWebSocketHeartbeat() {
   backendSocket.sendTXT(body);
 }
 
+static bool startPairingWindow();
+
 static void handleBackendWebSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
@@ -911,6 +913,20 @@ static void handleBackendWebSocketEvent(WStype_t type, uint8_t *payload, size_t 
         backendSocketAuthenticated = true;
         const uint32_t unixSeconds = document["serverUnixSeconds"] | 0U;
         if (unixSeconds >= 1700000000U) setSoftwareClock(unixSeconds, false);
+      } else if (strcmp(messageType, "enable_pairing") == 0 && backendSocketAuthenticated) {
+        const char *requestId = document["requestId"] | "";
+        if (strlen(requestId) != 36) return;
+        const bool accepted = startPairingWindow();
+        JsonDocument ack;
+        ack["type"] = "pairing_ack";
+        ack["requestId"] = requestId;
+        ack["accepted"] = accepted;
+        if (!accepted) {
+          ack["error"] = lockoutActive ? "Pairing temporarily locked" : "Invalid pairing PIN configuration";
+        }
+        String response;
+        serializeJson(ack, response);
+        backendSocket.sendTXT(response);
       } else if (strcmp(messageType, "auth_error") == 0) {
         Serial.println("Backend WebSocket authentication failed.");
         backendSocketAuthenticated = false;
@@ -1023,11 +1039,12 @@ static bool syncEvents() {
   return true;
 }
 
-static void startPairingWindow() {
-  if (lockoutActive) return;
-  if (strlen(SMART_LOCK_PAIRING_PIN) != 6) {
+static bool startPairingWindow() {
+  if (lockoutActive) return false;
+  if (strlen(SMART_LOCK_PAIRING_PIN) != 6 ||
+      strspn(SMART_LOCK_PAIRING_PIN, "0123456789") != 6) {
     Serial.println("SMART_LOCK_PAIRING_PIN must contain exactly six digits.");
-    return;
+    return false;
   }
   strlcpy(pairingPin, SMART_LOCK_PAIRING_PIN, sizeof(pairingPin));
   pairingActive = true;
@@ -1036,6 +1053,7 @@ static void startPairingWindow() {
   Serial.printf("Pairing enabled for 120 seconds. PIN: %s\n", pairingPin);
   setRgb(false, false, true);
   beep(120);
+  return true;
 }
 
 void setup() {

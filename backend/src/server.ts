@@ -74,6 +74,12 @@ type AdminSocket = {
 
 const adminSockets = new Set<AdminSocket>();
 const deviceSockets = new Map<string, Set<AdminSocket>>();
+type PairingResult = { accepted: boolean; error?: string };
+const pendingPairing = new Map<string, {
+  deviceId: string;
+  socket: AdminSocket;
+  finish: (result: PairingResult) => void;
+}>();
 
 function broadcast(type: string, payload: Record<string, unknown> = {}): void {
   const message = JSON.stringify({ type, ...payload });
@@ -348,6 +354,11 @@ app.get<{ Params: { deviceId: string } }>(
     app.log.info({ deviceId }, 'Controller WebSocket transport connected');
 
     const cleanup = () => {
+      for (const pending of pendingPairing.values()) {
+        if (pending.socket === socket) {
+          pending.finish({ accepted: false, error: 'Controller disconnected. Try again when it is online.' });
+        }
+      }
       const sockets = deviceSockets.get(deviceId);
       sockets?.delete(socket);
       if (sockets?.size === 0) deviceSockets.delete(deviceId);
@@ -396,7 +407,19 @@ app.get<{ Params: { deviceId: string } }>(
         const messageType = z.object({ type: z.string() }).safeParse(message);
         if (!messageType.success) return;
 
-        if (messageType.data.type === 'heartbeat') {
+        if (messageType.data.type === 'pairing_ack') {
+          const ack = z.object({
+            requestId: z.string().uuid(),
+            accepted: z.boolean(),
+            error: z.enum(['Pairing temporarily locked', 'Invalid pairing PIN configuration']).optional(),
+          }).safeParse(message);
+          if (ack.success) {
+            const pending = pendingPairing.get(ack.data.requestId);
+            if (pending?.deviceId === deviceId && pending.socket === socket) {
+              pending.finish({ accepted: ack.data.accepted, error: ack.data.error });
+            }
+          }
+        } else if (messageType.data.type === 'heartbeat') {
           await markDeviceSeen(deviceId);
           socket.send(JSON.stringify({
             type: 'heartbeat_ack',
@@ -623,6 +646,43 @@ app.get('/api/devices', { preHandler: requireAdmin }, async () => {
   );
   return { devices: result.rows };
 });
+
+app.post<{ Params: { deviceId: string } }>(
+  '/api/devices/:deviceId/pairing',
+  { preHandler: requireAdmin },
+  async (request, reply) => {
+    const deviceId = deviceIdSchema.parse(request.params.deviceId);
+    const device = await pool.query('SELECT 1 FROM devices WHERE device_id = $1', [deviceId]);
+    if (!device.rowCount) return reply.code(404).send({ error: 'Smart lock not found' });
+    const socket = [...(deviceSockets.get(deviceId) ?? [])].find((candidate) => candidate.readyState === 1);
+    if (!socket) return reply.code(409).send({ error: 'Controller is offline. Connect it to Wi-Fi first.' });
+    if ([...pendingPairing.values()].some((pending) => pending.deviceId === deviceId)) {
+      return reply.code(409).send({ error: 'A pairing request is already in progress for this lock.' });
+    }
+
+    const requestId = randomUUID();
+    const result = await new Promise<PairingResult>((resolve) => {
+      const finish = (value: PairingResult) => {
+        clearTimeout(timer);
+        pendingPairing.delete(requestId);
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish({
+        accepted: false,
+        error: 'Controller did not confirm pairing. Check its connection and install the latest firmware.',
+      }), 5000);
+      pendingPairing.set(requestId, { deviceId, socket, finish });
+      try {
+        socket.send(JSON.stringify({ type: 'enable_pairing', requestId }));
+      } catch {
+        finish({ accepted: false, error: 'Controller disconnected. Try again when it is online.' });
+      }
+    });
+    if (!result.accepted) return reply.code(409).send({ error: result.error ?? 'Controller could not enable pairing' });
+    app.log.info({ deviceId }, 'Administrator enabled controller pairing');
+    return { deviceId, expiresInSeconds: 120 };
+  },
+);
 
 app.post('/api/devices', { preHandler: requireAdmin }, async (request, reply) => {
   const body = z.object({
@@ -1064,6 +1124,9 @@ app.post<{ Params: { deviceId: string } }>(
 );
 
 app.addHook('onClose', async () => {
+  for (const pending of pendingPairing.values()) {
+    pending.finish({ accepted: false, error: 'API is restarting. Try again shortly.' });
+  }
   for (const socket of adminSockets) socket.close();
   for (const sockets of deviceSockets.values()) {
     for (const socket of sockets) socket.close();
