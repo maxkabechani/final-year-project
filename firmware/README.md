@@ -12,7 +12,7 @@ Install:
 
 - ESP32 board support by Espressif (CI uses 2.0.17)
 - ArduinoJson 7.4.2
-- WebSockets 2.7.3 by Markus Sattler
+- WebSockets by Markus Sattler (latest compatible Library Manager release)
 
 Select **ESP32 Dev Module** and **Huge APP (3MB No OTA / 1MB SPIFFS)**, then compile and upload.
 
