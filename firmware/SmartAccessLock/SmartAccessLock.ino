@@ -846,9 +846,21 @@ static void handleBackendWebSocketEvent(WStype_t type, uint8_t *payload, size_t 
       sendWebSocketAuth();
       break;
     case WStype_DISCONNECTED:
-      if (backendSocketAuthenticated) {
-        Serial.println("Backend WebSocket disconnected; cached access remains available.");
+      Serial.print("Backend WebSocket disconnected");
+      if (length > 0 && payload != nullptr) {
+        Serial.print(": ");
+        for (size_t i = 0; i < length; ++i) Serial.print(static_cast<char>(payload[i]));
       }
+      Serial.println();
+      backendSocketAuthenticated = false;
+      break;
+    case WStype_ERROR:
+      Serial.print("Backend WebSocket error");
+      if (length > 0 && payload != nullptr) {
+        Serial.print(": ");
+        for (size_t i = 0; i < length; ++i) Serial.print(static_cast<char>(payload[i]));
+      }
+      Serial.println();
       backendSocketAuthenticated = false;
       break;
     case WStype_TEXT: {
@@ -891,6 +903,14 @@ static void startBackendWebSocket() {
   String path;
   uint16_t port = 443;
   if (!parseBackendWebSocketEndpoint(host, port, path)) return;
+
+  IPAddress resolved;
+  if (WiFi.hostByName(host.c_str(), resolved) == 1) {
+    Serial.printf("Backend DNS resolved: %s -> %s\n",
+                  host.c_str(), resolved.toString().c_str());
+  } else {
+    Serial.printf("Backend DNS resolution failed for %s\n", host.c_str());
+  }
 
   backendSocket.onEvent(handleBackendWebSocketEvent);
   backendSocket.setReconnectInterval(5000);
