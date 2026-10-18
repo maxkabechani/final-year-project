@@ -1,5 +1,5 @@
 import type { PropsWithChildren } from 'react'
-import { LoaderCircle } from 'lucide-react'
+import { FullPageLoading } from '@/components/FullPageLoading'
 import { authClient } from '@/lib/auth-client'
 import { LoginPage } from '@/components/LoginPage'
 
@@ -7,11 +7,7 @@ export function AuthGate({ children }: PropsWithChildren) {
   const { data: session, isPending } = authClient.useSession()
 
   if (isPending) {
-    return (
-      <div className="grid min-h-svh place-items-center bg-sidebar">
-        <LoaderCircle className="size-6 animate-spin text-muted-foreground" />
-      </div>
-    )
+    return <FullPageLoading />
   }
 
   if (!session) return <LoginPage />
