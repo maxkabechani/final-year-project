@@ -123,6 +123,26 @@ export function useCreatePerson() {
   })
 }
 
+export function useUpdatePerson() {
+  const { config } = useAdminConfig()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { personId: string; name: string; studentNumber: string }) =>
+      apiRequest<{ person: Pick<Person, 'personId' | 'name' | 'studentNumber'> }>(
+        config, `/api/people/${encodeURIComponent(input.personId)}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ name: input.name, studentNumber: input.studentNumber }),
+        },
+      ),
+    onSuccess: () => {
+      for (const queryKey of ['people', 'access-grants', 'users', 'events']) {
+        void queryClient.invalidateQueries({ queryKey: [queryKey] })
+      }
+      toast.success('Person updated')
+    },
+  })
+}
+
 export function useGrantAccess() {
   const { config } = useAdminConfig()
   const queryClient = useQueryClient()

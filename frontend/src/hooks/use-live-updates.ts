@@ -45,6 +45,9 @@ export function useLiveUpdates() {
           }
           if (message.type === 'people_changed') {
             void queryClient.invalidateQueries({ queryKey: ['people'] })
+            void queryClient.invalidateQueries({ queryKey: ['access-grants'] })
+            void queryClient.invalidateQueries({ queryKey: ['users'] })
+            void queryClient.invalidateQueries({ queryKey: ['events'] })
           }
           if (message.type === 'access_changed') {
             void queryClient.invalidateQueries({ queryKey: ['access-grants'] })

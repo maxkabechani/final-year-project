@@ -1,15 +1,17 @@
 import { createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { Smartphone, UsersRound } from 'lucide-react'
-import { useMemo } from 'react'
+import { Pencil, Smartphone, UsersRound } from 'lucide-react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { DataTable } from '@/components/DataTable'
 import { PageError } from '@/components/PageState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import type { Person } from '@/lib/api'
 import { useAdminConfig } from '@/lib/config'
-import { usePeople } from '@/lib/queries'
+import { usePeople, useUpdatePerson } from '@/lib/queries'
 
 export const Route = createFileRoute('/people')({
   head: () => ({
@@ -27,6 +29,28 @@ export const Route = createFileRoute('/people')({
 function PeoplePage() {
   const { configured } = useAdminConfig()
   const people = usePeople()
+  const update = useUpdatePerson()
+  const [editing, setEditing] = useState<Person | null>(null)
+  const [name, setName] = useState('')
+  const [studentNumber, setStudentNumber] = useState('')
+
+  const editPerson = (person: Person) => {
+    update.reset()
+    setEditing(person)
+    setName(person.name)
+    setStudentNumber(person.studentNumber ?? '')
+  }
+
+  const savePerson = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!editing) return
+    try {
+      await update.mutateAsync({ personId: editing.personId, name: name.trim(), studentNumber: studentNumber.trim() })
+      setEditing(null)
+    } catch {
+      // Keep the form and the server error visible so the administrator can correct it.
+    }
+  }
 
   const columns = useMemo<ColumnDef<Person>[]>(() => [
     {
@@ -48,7 +72,24 @@ function PeoplePage() {
       accessorKey: 'studentNumber',
       header: 'Student number',
       cell: ({ getValue }) => (
-        <span className="font-medium">{String(getValue() || 'Not registered from app')}</span>
+        <span className="font-medium">{String(getValue() || 'Student number missing')}</span>
+      ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      enableSorting: false,
+      cell: ({ row }) => (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={update.isPending}
+          aria-label={`Edit ${row.original.name}`}
+          onClick={() => editPerson(row.original)}
+        >
+          <Pencil /> Edit person
+        </Button>
       ),
     },
     {
@@ -63,7 +104,7 @@ function PeoplePage() {
         <span className="text-muted-foreground">{new Date(String(getValue())).toLocaleString()}</span>
       ),
     },
-  ], [])
+  ], [update.isPending, update.reset])
 
   if (!configured) {
     return (
@@ -101,7 +142,33 @@ function PeoplePage() {
           </CardContent>
         </Card>
 
-        <Card className="h-fit">
+        {editing ? (
+          <Card className="h-fit" role="region" aria-label="Edit person">
+            <CardHeader>
+              <CardTitle>Edit person</CardTitle>
+              <CardDescription>Update this existing identity. Its phone credentials and door access stay attached.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={savePerson} className="space-y-4">
+                <p className="break-all text-xs text-muted-foreground">Person ID: {editing.personId}</p>
+                <div className="grid gap-2">
+                  <label htmlFor="edit-person-name" className="text-sm font-medium">Full name</label>
+                  <Input id="edit-person-name" value={name} onChange={(event) => setName(event.target.value)} minLength={2} maxLength={120} required disabled={update.isPending} autoFocus />
+                </div>
+                <div className="grid gap-2">
+                  <label htmlFor="edit-student-number" className="text-sm font-medium">Student/computer number</label>
+                  <Input id="edit-student-number" value={studentNumber} onChange={(event) => setStudentNumber(event.target.value)} minLength={4} maxLength={32} pattern="[A-Za-z0-9._-]{4,32}" disabled={update.isPending} aria-describedby="edit-student-number-help" />
+                  <p id="edit-student-number-help" className="text-xs text-muted-foreground">Leave blank if unknown. Each student number must be unique.</p>
+                </div>
+                {update.error && <PageError error={update.error} />}
+                <div className="flex flex-wrap gap-2">
+                  <Button type="submit" disabled={update.isPending}>{update.isPending ? 'Saving…' : 'Save changes'}</Button>
+                  <Button type="button" variant="outline" disabled={update.isPending} onClick={() => { setEditing(null); update.reset() }}>Cancel</Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        ) : <Card className="h-fit">
           <CardHeader>
             <div className="mb-2 grid size-9 place-items-center rounded-lg bg-muted">
               <Smartphone className="size-4" />
@@ -112,6 +179,7 @@ function PeoplePage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm text-muted-foreground">
+            <p>For users enrolled with the earlier phone-number version, use <strong>Edit person</strong> to add their student number to the existing identity.</p>
             <div className="flex gap-2"><Badge variant="outline">1</Badge><span>User registers their device.</span></div>
             <div className="flex gap-2"><Badge variant="outline">2</Badge><span>Administrator assigns one or more doors.</span></div>
             <div className="flex gap-2"><Badge variant="outline">3</Badge><span>Nearby authorized locks become unlockable in the app.</span></div>
@@ -120,7 +188,7 @@ function PeoplePage() {
               <span>No access is granted by registration alone.</span>
             </div>
           </CardContent>
-        </Card>
+        </Card>}
       </div>
     </div>
   )

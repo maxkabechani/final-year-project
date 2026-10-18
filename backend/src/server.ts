@@ -290,7 +290,7 @@ await app.register(cors, {
     }
     callback(new Error('Origin not allowed'), false);
   },
-  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['authorization', 'content-type', 'accept'],
   credentials: true,
   maxAge: 86400,
@@ -737,6 +737,36 @@ app.post('/api/people', { preHandler: requireAdmin }, async (request, reply) => 
   broadcast('people_changed', { personId });
   return reply.code(201).send({ personId, name: body.name, credentialKeyHex });
 });
+
+app.patch<{ Params: { personId: string } }>(
+  '/api/people/:personId',
+  { preHandler: requireAdmin },
+  async (request, reply) => {
+    const personId = z.string().uuid().parse(request.params.personId);
+    const body = z.object({
+      name: fullNameSchema,
+      studentNumber: z.union([studentNumberSchema, z.literal(''), z.null()]),
+    }).strict().parse(request.body);
+    const studentNumber = body.studentNumber ? normalizeStudentNumber(body.studentNumber) : null;
+    try {
+      const result = await pool.query(
+        `UPDATE people SET name = $2, student_number = $3
+         WHERE person_id = $1
+         RETURNING person_id AS "personId", name, student_number AS "studentNumber"`,
+        [personId, body.name, studentNumber],
+      );
+      if (!result.rowCount) return reply.code(404).send({ error: 'Person not found' });
+      broadcast('people_changed', { personId });
+      return { person: result.rows[0] };
+    } catch (error) {
+      if ((error as { code?: string; constraint?: string }).code === '23505' &&
+          (error as { constraint?: string }).constraint === 'people_student_number_unique') {
+        return reply.code(409).send({ error: 'This student number is already assigned to another person.' });
+      }
+      throw error;
+    }
+  },
+);
 
 type GrantInput = {
   personId?: string;

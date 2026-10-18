@@ -30,3 +30,4 @@ The API listens on port 8080 by default.
 Administrative endpoints use the `ADMIN_TOKEN` bearer token. Device endpoints use the one-time token created when a controller is registered.
 
 Door authorization remains local to the ESP32 after synchronization so a backend outage does not disable enrolled BLE access.
+- `PATCH /api/people/:personId`: administrator session required; update a person's name and student number in place. Blank or null student numbers are stored as missing. Existing person ID, credentials, phone sessions, and grants are preserved. Duplicate student numbers return HTTP 409.
