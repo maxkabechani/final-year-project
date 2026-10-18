@@ -42,6 +42,7 @@ jobs:
           filters: |
             mobile:
               - 'mobile/**'
+              - '.github/workflows/ci.yml'
             firmware:
               - 'firmware/**'
             backend:
@@ -96,6 +97,42 @@ jobs:
           path: mobile/build/app/outputs/flutter-apk/Smart-Access.apk
           if-no-files-found: error
           retention-days: 30
+
+  publish-android:
+    name: Publish Android download
+    needs: android
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: smart-access-android-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Smart-Access-APK
+          path: apk
+      - name: Publish APK for the dashboard download and QR code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="android-${GITHUB_SHA}"
+          cat > release-notes.md <<EOF
+          Smart Access Android demo APK built from commit ${GITHUB_SHA}.
+
+          Download Smart-Access.apk on your Android phone. This is the debug build used for the project demonstration.
+          EOF
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" apk/Smart-Access.apk --clobber
+            gh release edit "$tag" --latest --notes-file release-notes.md
+          else
+            gh release create "$tag" apk/Smart-Access.apk \
+              --target "$GITHUB_SHA" --latest \
+              --title "Smart Access Android" --notes-file release-notes.md
+          fi
 
   firmware:
     name: ESP32 firmware and binary

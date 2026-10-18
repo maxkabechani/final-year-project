@@ -3,6 +3,7 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { ArrowRight, ShieldCheck } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { AccessActivityChart } from '@/components/AccessActivityChart'
+import { AppDownloadCard } from '@/components/AppDownloadCard'
 import { DataTable } from '@/components/DataTable'
 import { DevicePicker } from '@/components/DevicePicker'
 import { PageError } from '@/components/PageState'
@@ -133,6 +134,10 @@ function OverviewPage() {
         people={people.data?.length ?? 0}
         grants={grants.data?.filter((grant) => grant.validUntil === null || grant.validUntil > now).length ?? 0}
       />
+
+      <div className="min-w-0 max-w-full px-4 lg:px-6">
+        <AppDownloadCard />
+      </div>
 
       <div className="min-w-0 max-w-full px-4 lg:px-6">
         <AccessActivityChart events={events.data ?? []} />

@@ -35,6 +35,18 @@ The file inside the artifact is:
 
 `Smart-Access.apk`
 
+Successful Android builds on `main` also publish the APK as a GitHub Release asset:
+
+https://github.com/maxkabechani/final-year-project/releases/latest/download/Smart-Access.apk
+
+The dashboard's **Download app** button and QR code both use this public download URL;
+phones do not need a dashboard or GitHub login to download it. The APK is the project's
+debug/demo build. Android may require allowing installation from the browser.
+Pull requests do not publish releases. To publish manually, run **Smart Access CI**
+with **Run workflow** on `main`. The link becomes available after the first successful
+**Publish Android download** job. Dokploy only needs to redeploy the frontend for the
+download card; the APK itself is hosted by GitHub.
+
 ## Firmware from an Android phone
 
 For the easiest phone-based upload, use:
