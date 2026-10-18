@@ -11,25 +11,25 @@ class MobilePerson {
   const MobilePerson({
     required this.personId,
     required this.fullName,
-    required this.phoneNumber,
+    required this.studentNumber,
   });
 
   final String personId;
   final String fullName;
-  final String phoneNumber;
+  final String studentNumber;
 
   factory MobilePerson.fromJson(Map<String, dynamic> json) {
     return MobilePerson(
       personId: json['personId']?.toString() ?? '',
       fullName: json['fullName']?.toString() ?? '',
-      phoneNumber: json['phoneNumber']?.toString() ?? '',
+      studentNumber: json['studentNumber']?.toString() ?? '',
     );
   }
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'personId': personId,
         'fullName': fullName,
-        'phoneNumber': phoneNumber,
+        'studentNumber': studentNumber,
       };
 }
 
@@ -161,7 +161,7 @@ class MobileApi {
 
   Future<MobileRegistration> register({
     required String fullName,
-    required String phoneNumber,
+    required String studentNumber,
     required String installationId,
     required String deviceLabel,
   }) async {
@@ -174,7 +174,7 @@ class MobileApi {
           },
           body: jsonEncode(<String, Object>{
             'fullName': fullName,
-            'phoneNumber': phoneNumber,
+            'studentNumber': studentNumber,
             'installationId': installationId,
             'deviceLabel': deviceLabel,
           }),
