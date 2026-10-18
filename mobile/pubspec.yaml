@@ -1,5 +1,5 @@
 name: smart_access
-description: Simple biometric BLE door access app for Smart Access.
+description: Secure device-authenticated BLE door access app for Smart Access.
 publish_to: none
 version: 0.1.0+1
 
