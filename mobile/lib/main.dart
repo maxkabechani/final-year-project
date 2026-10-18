@@ -1023,22 +1023,57 @@ class _RegistrationPageState extends State<RegistrationPage> {
                     const SizedBox(height: 14),
                     TextFormField(
                       controller: _studentNumber,
-                      keyboardType: TextInputType.phone,
+                      keyboardType: TextInputType.text,
+                      textCapitalization: TextCapitalization.characters,
                       textInputAction: TextInputAction.done,
-                      autofillHints: const <String>[
-                        AutofillHints.telestudentNumber,
-                      ],
                       decoration: const InputDecoration(
-                        labelText: 'Phone number',
-                        hintText: 'e.g. +260 97 1234567',
+                        labelText: 'Student / computer number',
+                        hintText: 'e.g. 2022066081',
                       ),
                       validator: (value) {
-                        final compact = (value ?? '').replaceAll(
-                          RegExp(r'[\s()-]'),
-                          '',
-                        );
-                        if (!RegExp(r'^\+?[0-9]{8,16}$').hasMatch(compact)) {
-                          return 'Enter a valid phone number';
+                        final normalized = (value ?? '')
+                            .trim()
+                            .replaceAll(RegExp(r'\s+'), '')
+                            .toUpperCase();
+                        if (!RegExp(r'^[A-Z0-9._-]{4,32}
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      onPressed: widget.registering ? null : _submit,
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size.fromHeight(52),
+                      ),
+                      child: widget.registering
+                          ? const SizedBox.square(
+                              dimension: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text('Register device'),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Registration does not grant door access. Your administrator controls which locks you can open.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.4,
+                        color: Colors.black45,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+).hasMatch(normalized)) {
+                          return 'Enter a valid student/computer number';
                         }
                         return null;
                       },
