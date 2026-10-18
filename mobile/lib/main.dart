@@ -556,16 +556,18 @@ class _AccessHomePageState extends State<AccessHomePage> {
     setState(() => _busyDoorId = door.deviceId);
 
     try {
-      final available = await _localAuth.getAvailableBiometrics();
-      if (available.isEmpty) {
+      // Prefer biometrics when the phone has them, but allow the device
+      // screen-lock credential (PIN, pattern, passcode, or password) as the
+      // secure fallback. local_auth presents the platform authentication UI.
+      if (!await _localAuth.isDeviceSupported()) {
         throw const FormatException(
-          'Set up fingerprint or face unlock on this phone first.',
+          'Set up a screen lock or biometric authentication on this phone first.',
         );
       }
 
       final accepted = await _localAuth.authenticate(
-        localizedReason: 'Unlock ${grant.deviceName}',
-        biometricOnly: true,
+        localizedReason: 'Confirm your identity to unlock ${grant.deviceName}',
+        biometricOnly: false,
         persistAcrossBackgrounding: true,
       );
       if (!accepted) return;
