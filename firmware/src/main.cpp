@@ -88,6 +88,7 @@ uint32_t lockoutExpiresAt = 0;
 uint32_t unlockUntil = 0;
 uint32_t lastSyncAt = 0;
 bool serverTimeSyncedThisBoot = false;
+int lastWifiStatus = -1;
 
 static int secureRandom(void *, unsigned char *output, size_t length) {
   esp_fill_random(output, length);
@@ -666,10 +667,17 @@ static bool secureGet(const String &url, String &body) {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  if (!http.begin(client, url)) return false;
+  if (!http.begin(client, url)) {
+    Serial.printf("HTTPS GET setup failed: %s\n", url.c_str());
+    return false;
+  }
   http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
   const int status = http.GET();
-  if (status >= 200 && status < 300) body = http.getString();
+  if (status >= 200 && status < 300) {
+    body = http.getString();
+  } else {
+    Serial.printf("Backend GET failed: HTTP %d (%s)\n", status, url.c_str());
+  }
   http.end();
   return status >= 200 && status < 300;
 }
@@ -678,10 +686,16 @@ static bool securePost(const String &url, const String &body) {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  if (!http.begin(client, url)) return false;
+  if (!http.begin(client, url)) {
+    Serial.printf("HTTPS POST setup failed: %s\n", url.c_str());
+    return false;
+  }
   http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
   http.addHeader("Content-Type", "application/json");
   const int status = http.POST(body);
+  if (status < 200 || status >= 300) {
+    Serial.printf("Backend POST failed: HTTP %d (%s)\n", status, url.c_str());
+  }
   http.end();
   return status >= 200 && status < 300;
 }
@@ -779,10 +793,8 @@ static void syncBackend() {
   const bool usersSynced = syncUsers();
   const bool eventsSynced = syncEvents();
   if (timeSynced) serverTimeSyncedThisBoot = true;
-  if (timeSynced || usersSynced || eventsSynced) {
-    Serial.printf("Backend sync: time=%d users=%d events=%d\n",
-                  timeSynced, usersSynced, eventsSynced);
-  }
+  Serial.printf("Backend sync: time=%d users=%d events=%d\n",
+                timeSynced, usersSynced, eventsSynced);
 }
 
 static void startPairingWindow() {
@@ -820,9 +832,15 @@ void setup() {
   }
 
   if (strlen(SMART_LOCK_WIFI_SSID) > 0) {
+    Serial.printf("Wi-Fi connecting to %s...\n", SMART_LOCK_WIFI_SSID);
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false);
     WiFi.begin(SMART_LOCK_WIFI_SSID, SMART_LOCK_WIFI_PASSWORD);
+  } else {
+    Serial.println("Wi-Fi disabled: SMART_LOCK_WIFI_SSID is blank.");
+  }
+  if (strlen(SMART_LOCK_DEVICE_TOKEN) <= 16) {
+    Serial.println("Backend sync disabled: SMART_LOCK_DEVICE_TOKEN is missing or too short.");
   }
 
   setupBle();
@@ -863,7 +881,21 @@ void loop() {
     lockoutActive = false;
     pairingFailures = 0;
   }
-  if (WiFi.status() == WL_CONNECTED) {
+  const int wifiStatus = static_cast<int>(WiFi.status());
+  if (wifiStatus != lastWifiStatus) {
+    lastWifiStatus = wifiStatus;
+    if (wifiStatus == WL_CONNECTED) {
+      Serial.printf("Wi-Fi connected. IP=%s RSSI=%d dBm\n",
+                    WiFi.localIP().toString().c_str(), WiFi.RSSI());
+      if (strlen(SMART_LOCK_DEVICE_TOKEN) > 16) {
+        lastSyncAt = 0;
+        syncBackend();
+      }
+    } else if (strlen(SMART_LOCK_WIFI_SSID) > 0) {
+      Serial.printf("Wi-Fi status changed: %d\n", wifiStatus);
+    }
+  }
+  if (wifiStatus == WL_CONNECTED) {
     const uint32_t syncIntervalMs = serverTimeSyncedThisBoot ? 60000U : 5000U;
     if (static_cast<uint32_t>(millis() - lastSyncAt) >= syncIntervalMs) {
       lastSyncAt = millis();
