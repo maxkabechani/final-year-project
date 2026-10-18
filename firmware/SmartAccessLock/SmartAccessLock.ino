@@ -942,6 +942,9 @@ static void startBackendWebSocket() {
   backendSocket.onEvent(handleBackendWebSocketEvent);
   backendSocket.setReconnectInterval(5000);
   backendSocket.enableHeartbeat(15000, 3000, 2);
+  // Native device clients have no browser origin; remove the library's default
+  // Origin: file:// header so the API's dashboard CORS policy accepts the upgrade.
+  backendSocket.setExtraHeaders("");
   backendSocket.beginSSL(host.c_str(), port, path.c_str());
   backendSocketStarted = true;
   Serial.printf("Backend WebSocket starting: wss://%s:%u%s\n",
