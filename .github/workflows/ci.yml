@@ -21,9 +21,9 @@ on:
       - '**/*.docx'
   workflow_dispatch:
 
-# Do not cancel an earlier component build when a later commit changes a
-# different component. The path filters below keep each run focused, so a
-# mobile build can finish while a later backend-only run executes separately.
+# Concurrency is scoped per component job below. A newer mobile change can
+# cancel a stale mobile build, but a backend-only push cannot cancel an APK
+# build that is already running.
 
 permissions:
   contents: read
@@ -60,6 +60,9 @@ jobs:
 
   android:
     name: Android app and APK
+    concurrency:
+      group: smart-access-android-${{ github.ref }}
+      cancel-in-progress: true
     needs: changes
     if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.mobile == 'true' }}
     runs-on: ubuntu-latest
@@ -103,6 +106,9 @@ jobs:
 
   firmware:
     name: Smart lock firmware compile
+    concurrency:
+      group: smart-access-firmware-${{ github.ref }}
+      cancel-in-progress: true
     needs: changes
     if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.firmware == 'true' }}
     runs-on: ubuntu-latest
@@ -116,6 +122,9 @@ jobs:
 
   arduino_firmware:
     name: ArduinoDroid sketch compile
+    concurrency:
+      group: smart-access-arduino-${{ github.ref }}
+      cancel-in-progress: true
     needs: changes
     if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.arduino == 'true' }}
     runs-on: ubuntu-latest
@@ -146,6 +155,9 @@ jobs:
 
   backend:
     name: Fastify API checks
+    concurrency:
+      group: smart-access-backend-${{ github.ref }}
+      cancel-in-progress: true
     needs: changes
     if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
@@ -162,6 +174,9 @@ jobs:
 
   frontend:
     name: TanStack dashboard checks
+    concurrency:
+      group: smart-access-frontend-${{ github.ref }}
+      cancel-in-progress: true
     needs: changes
     if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
