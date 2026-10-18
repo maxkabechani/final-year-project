@@ -45,8 +45,8 @@ function PeoplePage() {
       ),
     },
     {
-      accessorKey: 'phoneNumber',
-      header: 'Phone number',
+      accessorKey: 'studentNumber',
+      header: 'Student number',
       cell: ({ getValue }) => (
         <span className="font-medium">{String(getValue() || 'Not registered from app')}</span>
       ),
@@ -78,7 +78,7 @@ function PeoplePage() {
       <PageHeader
         eyebrow="Identity directory"
         title="People"
-        description="Users register their phone with their full name and phone number, then appear here ready for access assignment."
+        description="Users register the app with their full name and student/computer number, then appear here ready for access assignment."
       />
 
       <div className="grid min-w-0 max-w-full grid-cols-1 gap-4 px-4 lg:px-6 xl:grid-cols-[minmax(0,1fr)_20rem]">
@@ -95,7 +95,7 @@ function PeoplePage() {
                 data={people.data ?? []}
                 columns={columns}
                 emptyMessage={people.isLoading ? 'Loading people…' : 'No one has registered from the app yet.'}
-                filterPlaceholder="Search name or phone number…"
+                filterPlaceholder="Search name or student number…"
               />
             )}
           </CardContent>
@@ -108,11 +108,11 @@ function PeoplePage() {
             </div>
             <CardTitle>Simple registration</CardTitle>
             <CardDescription>
-              A user installs Smart Access, enters their full name and phone number once, then appears here automatically.
+              A user installs Smart Access, enters their full name and student/computer number once, then appears here automatically.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 text-sm text-muted-foreground">
-            <div className="flex gap-2"><Badge variant="outline">1</Badge><span>User registers phone.</span></div>
+            <div className="flex gap-2"><Badge variant="outline">1</Badge><span>User registers their device.</span></div>
             <div className="flex gap-2"><Badge variant="outline">2</Badge><span>Administrator assigns one or more doors.</span></div>
             <div className="flex gap-2"><Badge variant="outline">3</Badge><span>Nearby authorized locks become unlockable in the app.</span></div>
             <div className="flex items-center gap-2 border-t pt-3 text-xs">
