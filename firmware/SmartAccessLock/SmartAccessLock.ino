@@ -8,6 +8,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <WebSocketsClient.h>
 #include <esp_system.h>
 #include <mbedtls/ecdh.h>
 #include <mbedtls/ecp.h>
@@ -17,9 +18,8 @@
 #include <vector>
 
 // ============================================================
-// SMART ACCESS - ANDROID / ARDUINODROID SKETCH
-// GitHub Actions also exports compiled binaries for USB flashing.
-// CI target: ArduinoDroid firmware only.
+// SMART ACCESS - CANONICAL ESP32 FIRMWARE
+// This is the only controller firmware source in the repository.
 // Edit only this section for the controller you are flashing.
 // The defaults below are enough for an offline BLE demo.
 // ============================================================
@@ -109,10 +109,14 @@ uint8_t pairingFailures = 0;
 bool lockoutActive = false;
 uint32_t lockoutExpiresAt = 0;
 uint32_t unlockUntil = 0;
-uint32_t lastSyncAt = 0;
 uint32_t lastWifiReconnectAt = 0;
+uint32_t lastWsHeartbeatAt = 0;
+uint32_t lastEventUploadAt = 0;
 bool serverTimeSyncedThisBoot = false;
+bool backendSocketStarted = false;
+bool backendSocketAuthenticated = false;
 int lastWifiStatus = -1;
+WebSocketsClient backendSocket;
 
 static int secureRandom(void *, unsigned char *output, size_t length) {
   esp_fill_random(output, length);
@@ -741,100 +745,16 @@ static bool backendReady() {
          WiFi.status() == WL_CONNECTED;
 }
 
-static bool secureGet(const String &url, String &body) {
-  for (uint8_t attempt = 1; attempt <= 2; ++attempt) {
-    WiFiClientSecure client;
-    client.setInsecure();
-    client.setTimeout(8000);
-    HTTPClient http;
-    http.setConnectTimeout(8000);
-    http.setTimeout(8000);
-    if (!http.begin(client, url)) {
-      Serial.printf("HTTPS GET setup failed: %s\n", url.c_str());
-      return false;
-    }
-    http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
-    const int status = http.GET();
-    if (status >= 200 && status < 300) {
-      body = http.getString();
-      http.end();
-      return true;
-    }
-    if (status < 0) {
-      Serial.printf("Backend GET failed: %s (attempt %u/2, %s)\n",
-                    HTTPClient::errorToString(status).c_str(),
-                    static_cast<unsigned>(attempt), url.c_str());
-    } else {
-      Serial.printf("Backend GET failed: HTTP %d (attempt %u/2, %s)\n",
-                    status, static_cast<unsigned>(attempt), url.c_str());
-    }
-    http.end();
-    if (status >= 400 && status < 500) return false;
-    if (attempt < 2) delay(300);
-  }
-  return false;
-}
-
-static bool securePost(const String &url, const String &body) {
-  for (uint8_t attempt = 1; attempt <= 2; ++attempt) {
-    WiFiClientSecure client;
-    client.setInsecure();
-    client.setTimeout(8000);
-    HTTPClient http;
-    http.setConnectTimeout(8000);
-    http.setTimeout(8000);
-    if (!http.begin(client, url)) {
-      Serial.printf("HTTPS POST setup failed: %s\n", url.c_str());
-      return false;
-    }
-    http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
-    http.addHeader("Content-Type", "application/json");
-    const int status = http.POST(body);
-    if (status >= 200 && status < 300) {
-      http.end();
-      return true;
-    }
-    if (status < 0) {
-      Serial.printf("Backend POST failed: %s (attempt %u/2, %s)\n",
-                    HTTPClient::errorToString(status).c_str(),
-                    static_cast<unsigned>(attempt), url.c_str());
-    } else {
-      Serial.printf("Backend POST failed: HTTP %d (attempt %u/2, %s)\n",
-                    status, static_cast<unsigned>(attempt), url.c_str());
-    }
-    http.end();
-    if (status >= 400 && status < 500) return false;
-    if (attempt < 2) delay(300);
-  }
-  return false;
-}
-
-static bool syncClock() {
-  String body;
-  const String path = "/api/devices/" + String(SMART_LOCK_DEVICE_ID) + "/time";
-  if (!secureGet(backendRoot(path.c_str()), body)) return false;
-  JsonDocument document;
-  if (deserializeJson(document, body) != DeserializationError::Ok) return false;
-  const uint32_t unixSeconds = document["unixSeconds"] | 0U;
-  if (unixSeconds < 1700000000U) return false;
-  setSoftwareClock(unixSeconds);
-  return true;
-}
-
-static bool syncUsers(bool &timeSynced) {
-  timeSynced = false;
-  String body;
-  const String path = "/api/devices/" + String(SMART_LOCK_DEVICE_ID) + "/sync";
-  if (!secureGet(backendRoot(path.c_str()), body)) return false;
-  JsonDocument document;
-  if (deserializeJson(document, body) != DeserializationError::Ok) return false;
+static bool applySyncDocument(JsonDocument &document) {
   const uint32_t unixSeconds = document["serverUnixSeconds"] | 0U;
   if (unixSeconds >= 1700000000U) {
     setSoftwareClock(unixSeconds);
-    timeSynced = true;
+    serverTimeSyncedThisBoot = true;
   }
+
   JsonArray array = document["users"].as<JsonArray>();
   if (array.isNull() || array.size() > kMaxUsers) return false;
+
   std::vector<UserRecord> updated;
   updated.reserve(array.size());
   for (JsonObject item : array) {
@@ -861,7 +781,122 @@ static bool syncUsers(bool &timeSynced) {
         user.endMinute > 1440) return false;
     updated.push_back(user);
   }
-  return saveUsers(updated);
+
+  const bool saved = saveUsers(updated);
+  if (saved) {
+    Serial.printf("WebSocket sync applied: time=%d users=%u\n",
+                  unixSeconds >= 1700000000U,
+                  static_cast<unsigned>(updated.size()));
+  }
+  return saved;
+}
+
+static bool parseBackendWebSocketEndpoint(String &host, uint16_t &port, String &path) {
+  String root = SMART_LOCK_BACKEND_URL;
+  while (root.endsWith("/")) root.remove(root.length() - 1);
+  if (!root.startsWith("https://")) {
+    Serial.println("Backend WebSocket requires an https:// backend URL.");
+    return false;
+  }
+
+  root.remove(0, 8);
+  const int slash = root.indexOf('/');
+  String authority = slash >= 0 ? root.substring(0, slash) : root;
+  String basePath = slash >= 0 ? root.substring(slash) : "";
+
+  port = 443;
+  const int colon = authority.lastIndexOf(':');
+  if (colon > 0) {
+    const int parsedPort = authority.substring(colon + 1).toInt();
+    if (parsedPort <= 0 || parsedPort > 65535) return false;
+    port = static_cast<uint16_t>(parsedPort);
+    host = authority.substring(0, colon);
+  } else {
+    host = authority;
+  }
+
+  path = basePath + "/ws/device/" + String(SMART_LOCK_DEVICE_ID);
+  return host.length() > 0;
+}
+
+static void sendWebSocketAuth() {
+  JsonDocument document;
+  document["type"] = "auth";
+  document["token"] = SMART_LOCK_DEVICE_TOKEN;
+  String body;
+  serializeJson(document, body);
+  backendSocket.sendTXT(body);
+}
+
+static void sendWebSocketHeartbeat() {
+  JsonDocument document;
+  document["type"] = "heartbeat";
+  String body;
+  serializeJson(document, body);
+  backendSocket.sendTXT(body);
+}
+
+static void handleBackendWebSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      backendSocketAuthenticated = false;
+      Serial.println("Backend WebSocket connected; authenticating...");
+      sendWebSocketAuth();
+      break;
+    case WStype_DISCONNECTED:
+      if (backendSocketAuthenticated) {
+        Serial.println("Backend WebSocket disconnected; cached access remains available.");
+      }
+      backendSocketAuthenticated = false;
+      break;
+    case WStype_TEXT: {
+      String text;
+      text.reserve(length);
+      for (size_t i = 0; i < length; ++i) text += static_cast<char>(payload[i]);
+
+      JsonDocument document;
+      if (deserializeJson(document, text) != DeserializationError::Ok) {
+        Serial.println("Backend WebSocket sent invalid JSON.");
+        return;
+      }
+
+      const char *messageType = document["type"] | "";
+      if (strcmp(messageType, "sync") == 0) {
+        backendSocketAuthenticated = true;
+        if (!applySyncDocument(document)) {
+          Serial.println("Backend WebSocket sync payload was invalid.");
+        }
+      } else if (strcmp(messageType, "heartbeat_ack") == 0) {
+        backendSocketAuthenticated = true;
+        const uint32_t unixSeconds = document["serverUnixSeconds"] | 0U;
+        if (unixSeconds >= 1700000000U) setSoftwareClock(unixSeconds, false);
+      } else if (strcmp(messageType, "auth_error") == 0) {
+        Serial.println("Backend WebSocket authentication failed.");
+        backendSocketAuthenticated = false;
+        backendSocket.disconnect();
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+static void startBackendWebSocket() {
+  if (backendSocketStarted || strlen(SMART_LOCK_DEVICE_TOKEN) <= 16) return;
+
+  String host;
+  String path;
+  uint16_t port = 443;
+  if (!parseBackendWebSocketEndpoint(host, port, path)) return;
+
+  backendSocket.onEvent(handleBackendWebSocketEvent);
+  backendSocket.setReconnectInterval(5000);
+  backendSocket.enableHeartbeat(15000, 3000, 2);
+  backendSocket.beginSSL(host.c_str(), port, path.c_str());
+  backendSocketStarted = true;
+  Serial.printf("Backend WebSocket starting: wss://%s:%u%s\n",
+                host.c_str(), static_cast<unsigned>(port), path.c_str());
 }
 
 static void formatIsoUtc(uint32_t timestamp, char output[21]) {
@@ -900,16 +935,6 @@ static bool syncEvents() {
   events.clear();
   saveEvents();
   return true;
-}
-
-static void syncBackend() {
-  if (!backendReady()) return;
-  bool timeSynced = false;
-  const bool usersSynced = syncUsers(timeSynced);
-  const bool eventsSynced = syncEvents();
-  if (timeSynced) serverTimeSyncedThisBoot = true;
-  Serial.printf("Backend sync: time=%d users=%d events=%d\n",
-                timeSynced, usersSynced, eventsSynced);
 }
 
 static void startPairingWindow() {
@@ -965,7 +990,6 @@ void setup() {
   showMessage("Smart lock ready", clockValid ? "Offline access ready" : "Waiting for time sync");
   Serial.printf("Controller %s ready with %u authorized users.\n",
                 SMART_LOCK_DEVICE_ID, static_cast<unsigned>(users.size()));
-  if (WiFi.status() == WL_CONNECTED) syncBackend();
 }
 
 void loop() {
@@ -1004,19 +1028,27 @@ void loop() {
     if (wifiStatus == WL_CONNECTED) {
       Serial.printf("Wi-Fi connected. IP=%s RSSI=%d dBm\n",
                     WiFi.localIP().toString().c_str(), WiFi.RSSI());
-      if (strlen(SMART_LOCK_DEVICE_TOKEN) > 16) {
-        lastSyncAt = 0;
-        syncBackend();
-      }
+      startBackendWebSocket();
     } else if (strlen(SMART_LOCK_WIFI_SSID) > 0) {
       Serial.printf("Wi-Fi status changed: %d\n", wifiStatus);
+      backendSocketAuthenticated = false;
     }
   }
+
   if (wifiStatus == WL_CONNECTED) {
-    const uint32_t syncIntervalMs = serverTimeSyncedThisBoot ? 30000U : 5000U;
-    if (static_cast<uint32_t>(millis() - lastSyncAt) >= syncIntervalMs) {
-      lastSyncAt = millis();
-      syncBackend();
+    startBackendWebSocket();
+    if (backendSocketStarted) backendSocket.loop();
+
+    if (backendSocketAuthenticated &&
+        static_cast<uint32_t>(millis() - lastWsHeartbeatAt) >= 30000U) {
+      lastWsHeartbeatAt = millis();
+      sendWebSocketHeartbeat();
+    }
+
+    if (!events.empty() &&
+        static_cast<uint32_t>(millis() - lastEventUploadAt) >= 10000U) {
+      lastEventUploadAt = millis();
+      if (syncEvents()) Serial.println("Queued access events uploaded.");
     }
   } else if (strlen(SMART_LOCK_WIFI_SSID) > 0 &&
              static_cast<uint32_t>(millis() - lastWifiReconnectAt) >= 10000U) {
