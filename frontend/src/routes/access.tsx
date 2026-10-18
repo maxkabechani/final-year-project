@@ -56,13 +56,13 @@ function AccessPage() {
   const [startTime, setStartTime] = useState('08:00')
   const [endTime, setEndTime] = useState('18:00')
 
-  const registeredPeople = (people.data ?? []).filter((person) => Boolean(person.studentNumber))
+  const registeredPeople = people.data ?? []
 
   const personOptions = registeredPeople.map((person) => ({
     value: person.personId,
     label: person.name,
-    description: person.studentNumber ?? undefined,
-    keywords: person.studentNumber ?? undefined,
+    description: person.studentNumber || person.personId.slice(0, 8),
+    keywords: `${person.studentNumber ?? ''} ${person.personId}`,
   }))
 
   const deviceOptions = (devices.data ?? []).map((device) => ({
@@ -212,25 +212,23 @@ function AccessPage() {
                     disabled={people.isFetching}
                     onClick={() => void people.refetch()}
                   >
-                    {people.isFetching ? 'Refreshing…' : 'Refresh students'}
+                    {people.isFetching ? 'Refreshing…' : 'Refresh people'}
                   </Button>
                 </div>
                 <SearchCombobox
                   value={personId}
                   onValueChange={setPersonId}
                   options={personOptions}
-                  placeholder={people.isLoading ? 'Loading students…' : 'Select registered student'}
+                  placeholder={people.isLoading ? 'Loading people…' : 'Select person'}
                   searchPlaceholder="Search name or student number…"
-                  emptyMessage={people.error ? 'Could not load students. Use Refresh students to retry.' : registeredPeople.length === 0 ? 'No registered students yet. Register in the Android app, then refresh.' : 'No matching students.'}
+                  emptyMessage={people.error ? 'Could not load people. Use Refresh people to retry.' : registeredPeople.length === 0 ? 'No people registered yet. Register in the Android app, then refresh.' : 'No matching people.'}
                   disabled={people.isLoading}
                 />
                 {people.error ? (
                   <PageError error={people.error} />
                 ) : !people.isLoading && registeredPeople.length === 0 && (
                   <p className="text-xs text-muted-foreground">
-                    {(people.data?.length ?? 0) > 0
-                      ? 'The existing people do not have student numbers. Register the student in the Android app, then refresh.'
-                      : 'No app registrations yet. Ask the student to register in the Android app, then refresh.'}
+                    No people registered yet. Register in the Android app, then refresh.
                   </p>
                 )}
               </div>
@@ -284,7 +282,7 @@ function AccessPage() {
                 </div>
               </div>
 
-              <Button type="submit" disabled={grantAccess.isPending || registeredPeople.length === 0}>
+              <Button type="submit" disabled={grantAccess.isPending || !personId || !deviceId}>
                 <UserPlus />
                 {grantAccess.isPending ? 'Saving access…' : 'Grant access'}
               </Button>
