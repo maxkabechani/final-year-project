@@ -20,6 +20,7 @@
 // ============================================================
 // SMART ACCESS - CANONICAL ESP32 FIRMWARE
 // This is the only controller firmware source in the repository.
+// Backend grant/time sync is WebSocket-driven; BLE access remains offline-first.
 // Edit only this section for the controller you are flashing.
 // The defaults below are enough for an offline BLE demo.
 // ============================================================
