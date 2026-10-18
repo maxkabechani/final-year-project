@@ -1,9 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { KeyRound, Smartphone, Trash2, UserPlus } from 'lucide-react'
+import { KeyRound, Pencil, Smartphone, UserPlus } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 import { DataTable } from '@/components/DataTable'
+import { ConfirmAction } from '@/components/ConfirmAction'
 import { SearchCombobox } from '@/components/SearchCombobox'
 import { PageError } from '@/components/PageState'
 import { PageHeader } from '@/components/PageHeader'
@@ -15,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { dayMaskFromDate, daysLabel, grantState, minutesToTime, timeToMinutes, type AccessGrant, type AccessSchedule, type AccessType } from '@/lib/api'
 import { useAdminConfig } from '@/lib/config'
-import { useAccessGrants, useDevices, useGrantAccess, usePeople, useRevokeGrant } from '@/lib/queries'
+import { useAccessGrants, useDevices, useGrantAccess, useManageResource, usePeople, useRevokeGrant } from '@/lib/queries'
 
 export const Route = createFileRoute('/access')({
   head: () => ({
@@ -47,6 +48,8 @@ function AccessPage() {
   const grants = useAccessGrants()
   const grantAccess = useGrantAccess()
   const revoke = useRevokeGrant()
+  const updateGrant = useManageResource('access-grants')
+  const [editingGrantId, setEditingGrantId] = useState('')
 
   const [personId, setPersonId] = useState('')
   const [deviceId, setDeviceId] = useState('')
@@ -121,22 +124,23 @@ function AccessPage() {
       header: '',
       enableSorting: false,
       cell: ({ row }) => (
-        <div className="flex justify-end">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`Revoke access for ${row.original.personName}`}
-            disabled={revoke.isPending}
-            onClick={() => revoke.mutate(row.original.grantId)}
-            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-          >
-            <Trash2 />
-          </Button>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" size="sm" aria-label={`Edit access for ${row.original.personName}`} onClick={() => {
+            const grant = row.original
+            updateGrant.reset(); setEditingGrantId(grant.grantId); setPersonId(grant.personId); setDeviceId(grant.deviceId)
+            setAccessType(grant.accessType); setStartTime(minutesToTime(grant.startMinute)); setEndTime(minutesToTime(grant.endMinute))
+            setSelectedDays(dayOptions.filter(day => (grant.daysMask & (1 << Number(day.value))) !== 0).map(day => day.value))
+            const date = new Date(grant.validFrom * 1000)
+            setOneOffDate(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`)
+            document.getElementById('access-assignment')?.scrollIntoView({ behavior: 'smooth' })
+          }}><Pencil /> Edit</Button>
+          <ConfirmAction name={`access for ${row.original.personName}`} label="Revoke" disabled={revoke.isPending}
+            description="Remove this door assignment. Connected locks receive the change now; offline locks apply it after reconnecting."
+            onConfirm={async () => { await revoke.mutateAsync(row.original.grantId); setEditingGrantId('') }} />
         </div>
       ),
     },
-  ], [revoke])
+  ], [revoke, updateGrant.reset])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -156,8 +160,8 @@ function AccessPage() {
         daysMask,
         startMinute,
         endMinute,
-        validFrom: Math.floor(Date.now() / 1000),
-        validUntil: null,
+        validFrom: editingGrantId ? (grants.data?.find(grant => grant.grantId === editingGrantId)?.validFrom ?? Math.floor(Date.now() / 1000)) : Math.floor(Date.now() / 1000),
+        validUntil: editingGrantId ? (grants.data?.find(grant => grant.grantId === editingGrantId && grant.accessType === 'recurring')?.validUntil ?? null) : null,
       }
     } else {
       const start = new Date(`${oneOffDate}T${startTime}:00`)
@@ -175,7 +179,15 @@ function AccessPage() {
       }
     }
 
-    await grantAccess.mutateAsync({ personId, deviceId, schedule })
+    if (editingGrantId) {
+      try {
+        await updateGrant.mutateAsync({ id: editingGrantId, method: 'PATCH', body: { schedule } })
+        setEditingGrantId(''); setPersonId(''); setDeviceId('')
+      } catch { /* Keep the API error visible in the form. */ }
+    } else {
+      try { await grantAccess.mutateAsync({ personId, deviceId, schedule }) }
+      catch { /* Keep the API error visible in the form. */ }
+    }
   }
 
   if (!configured) {
@@ -195,9 +207,9 @@ function AccessPage() {
       />
 
       <div className="grid min-w-0 max-w-full grid-cols-1 gap-4 px-4 lg:px-6 xl:grid-cols-[minmax(0,1fr)_21.25rem]">
-        <Card>
+        <Card id="access-assignment">
           <CardHeader>
-            <CardTitle>Access assignment</CardTitle>
+            <CardTitle>{editingGrantId ? 'Edit access assignment' : 'Access assignment'}</CardTitle>
             <CardDescription>A person can have different schedules on different smart locks.</CardDescription>
           </CardHeader>
           <CardContent>
@@ -222,7 +234,7 @@ function AccessPage() {
                   placeholder={people.isLoading ? 'Loading people…' : 'Select person'}
                   searchPlaceholder="Search name or student number…"
                   emptyMessage={people.error ? 'Could not load people. Use Refresh people to retry.' : registeredPeople.length === 0 ? 'No people registered yet. Register in the Android app, then refresh.' : 'No matching people.'}
-                  disabled={people.isLoading}
+                  disabled={people.isLoading || Boolean(editingGrantId)}
                 />
                 {people.error ? (
                   <PageError error={people.error} />
@@ -242,7 +254,7 @@ function AccessPage() {
                   placeholder="Select smart lock"
                   searchPlaceholder="Search room, lock or location…"
                   emptyMessage="No matching smart locks."
-                  disabled={deviceOptions.length === 0}
+                  disabled={deviceOptions.length === 0 || Boolean(editingGrantId)}
                 />
               </div>
 
@@ -278,14 +290,20 @@ function AccessPage() {
                 </div>
                 <div className="grid gap-2">
                   <label htmlFor="end-time" className="text-sm font-medium">Until</label>
-                  <Input id="end-time" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+                  <Input id="end-time" type="time" value={endTime === '24:00' ? '00:00' : endTime} disabled={endTime === '24:00'} onChange={(e) => setEndTime(e.target.value)} />
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <input type="checkbox" checked={endTime === '24:00'} onChange={event => setEndTime(event.target.checked ? '24:00' : '18:00')} />
+                    Until midnight (end of day)
+                  </label>
                 </div>
               </div>
 
-              <Button type="submit" disabled={grantAccess.isPending || !personId || !deviceId}>
+              <Button type="submit" disabled={grantAccess.isPending || updateGrant.isPending || !personId || !deviceId}>
                 <UserPlus />
-                {grantAccess.isPending ? 'Saving access…' : 'Grant access'}
+                {grantAccess.isPending || updateGrant.isPending ? 'Saving access…' : editingGrantId ? 'Save access' : 'Grant access'}
               </Button>
+              {editingGrantId && <Button type="button" variant="outline" disabled={updateGrant.isPending} onClick={() => { setEditingGrantId(''); setPersonId(''); setDeviceId(''); updateGrant.reset() }}>Cancel edit</Button>}
+              {updateGrant.error && <PageError error={updateGrant.error} />}
               {grantAccess.error && <PageError error={grantAccess.error} />}
             </form>
           </CardContent>

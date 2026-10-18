@@ -3,6 +3,7 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { Pencil, Smartphone, UsersRound } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { DataTable } from '@/components/DataTable'
+import { ConfirmAction } from '@/components/ConfirmAction'
 import { PageError } from '@/components/PageState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
@@ -11,7 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import type { Person } from '@/lib/api'
 import { useAdminConfig } from '@/lib/config'
-import { usePeople, useUpdatePerson } from '@/lib/queries'
+import { useManageResource, usePeople, useUpdatePerson } from '@/lib/queries'
 
 export const Route = createFileRoute('/people')({
   head: () => ({
@@ -30,6 +31,7 @@ function PeoplePage() {
   const { configured } = useAdminConfig()
   const people = usePeople()
   const update = useUpdatePerson()
+  const manage = useManageResource('people')
   const [editing, setEditing] = useState<Person | null>(null)
   const [name, setName] = useState('')
   const [studentNumber, setStudentNumber] = useState('')
@@ -80,6 +82,7 @@ function PeoplePage() {
       header: '',
       enableSorting: false,
       cell: ({ row }) => (
+        <div className="flex items-center gap-2">
         <Button
           type="button"
           variant="outline"
@@ -90,6 +93,13 @@ function PeoplePage() {
         >
           <Pencil /> Edit person
         </Button>
+        <ConfirmAction name={row.original.name} disabled={manage.isPending || update.isPending}
+          description="This permanently deletes the person, their phone sessions, and all door assignments. Offline locks keep cached permissions until they reconnect."
+          onConfirm={async () => {
+            await manage.mutateAsync({ id: row.original.personId, method: 'DELETE' })
+            setEditing(null)
+          }} />
+        </div>
       ),
     },
     {
@@ -104,7 +114,7 @@ function PeoplePage() {
         <span className="text-muted-foreground">{new Date(String(getValue())).toLocaleString()}</span>
       ),
     },
-  ], [update.isPending, update.reset])
+  ], [update.isPending, update.reset, manage.isPending, manage.mutateAsync])
 
   if (!configured) {
     return (

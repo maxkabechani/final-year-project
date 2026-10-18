@@ -192,7 +192,7 @@ async function requireOwner(request: FastifyRequest, reply: FastifyReply): Promi
     return;
   }
   if (role !== 'owner') {
-    await reply.code(403).send({ error: 'Only the owner can add administrators' });
+    await reply.code(403).send({ error: 'Only an owner can manage administrators' });
   }
 }
 
@@ -301,6 +301,10 @@ app.route({
   url: '/api/auth/*',
   async handler(request, reply) {
     try {
+      const authPath = new URL(request.url, 'http://localhost').pathname;
+      if (authPath.startsWith('/api/auth/admin/')) {
+        return reply.code(403).send({ error: 'Use dashboard administrator management for this action.' });
+      }
       const base = process.env.BETTER_AUTH_URL ?? `http://${request.headers.host}`;
       const url = new URL(request.url, base);
       const authRequest = new Request(url.toString(), {
@@ -629,7 +633,100 @@ app.post('/api/admins', { preHandler: requireOwner }, async (request, reply) => 
     },
   });
 
+  broadcast('admins_changed');
   return reply.code(201).send({ admin: created.user });
+});
+
+app.route<{ Params: { adminId: string } }>({
+  method: ['PATCH', 'DELETE'],
+  url: '/api/admins/:adminId',
+  preHandler: requireOwner,
+  async handler(request, reply) {
+    const adminId = z.string().min(1).max(128).parse(request.params.adminId);
+    const actor = await dashboardSession(request);
+    const body = request.method === 'PATCH' ? z.object({
+      name: fullNameSchema,
+      email: z.string().trim().email().max(254),
+      role: z.enum(['owner', 'admin']),
+    }).strict().parse(request.body) : null;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Serialize owner changes so concurrent requests cannot remove every owner.
+      await client.query('LOCK TABLE "user" IN SHARE ROW EXCLUSIVE MODE');
+      const currentActor = await client.query('SELECT role FROM "user" WHERE id = $1', [actor?.user.id]);
+      if (currentActor.rows[0]?.role !== 'owner') {
+        await client.query('ROLLBACK');
+        return reply.code(403).send({ error: 'Only an owner can manage administrators' });
+      }
+      const target = await client.query('SELECT role FROM "user" WHERE id = $1 AND role IN (\'owner\', \'admin\')', [adminId]);
+      if (!target.rowCount) {
+        await client.query('ROLLBACK');
+        return reply.code(404).send({ error: 'Administrator not found' });
+      }
+      if (request.method === 'DELETE' && adminId === actor?.user.id) {
+        await client.query('ROLLBACK');
+        return reply.code(409).send({ error: 'You cannot delete your own administrator account.' });
+      }
+      if (target.rows[0].role === 'owner' && body?.role !== 'owner') {
+        const owners = await client.query('SELECT count(*)::int AS count FROM "user" WHERE role = \'owner\'');
+        if (owners.rows[0].count <= 1) {
+          await client.query('ROLLBACK');
+          return reply.code(409).send({ error: 'At least one owner must remain.' });
+        }
+      }
+      if (body) {
+        await client.query('UPDATE "user" SET name=$2, email=$3, role=$4, "updatedAt"=now(), "emailVerified"=CASE WHEN email=$3 THEN "emailVerified" ELSE false END WHERE id=$1', [adminId, body.name, body.email.toLowerCase(), body.role]);
+        if (target.rows[0].role !== body.role) await client.query('DELETE FROM "session" WHERE "userId"=$1', [adminId]);
+      } else {
+        await client.query('DELETE FROM "session" WHERE "userId"=$1', [adminId]);
+        await client.query('DELETE FROM "account" WHERE "userId"=$1', [adminId]);
+        await client.query('DELETE FROM "user" WHERE id=$1', [adminId]);
+      }
+      await client.query('COMMIT');
+      broadcast('admins_changed');
+      // Revalidate existing dashboard sockets after an account loses access.
+      if (!body || target.rows[0].role !== body.role) {
+        for (const socket of adminSockets) socket.close();
+      }
+      return reply.code(204).send();
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  },
+});
+
+app.patch<{ Params: { deviceId: string } }>('/api/devices/:deviceId', { preHandler: requireAdmin }, async (request, reply) => {
+  const deviceId = deviceIdSchema.parse(request.params.deviceId);
+  const body = z.object({ name: z.string().trim().min(1).max(120), location: z.string().trim().max(160) }).strict().parse(request.body);
+  const result = await pool.query('UPDATE devices SET name=$2, location=$3 WHERE device_id=$1', [deviceId, body.name, body.location]);
+  if (!result.rowCount) return reply.code(404).send({ error: 'Smart lock not found' });
+  broadcast('devices_changed', { deviceId });
+  broadcast('access_changed', { deviceId });
+  broadcast('events_changed', { deviceId });
+  return reply.code(204).send();
+});
+
+app.delete<{ Params: { deviceId: string } }>('/api/devices/:deviceId', { preHandler: requireAdmin }, async (request, reply) => {
+  const deviceId = deviceIdSchema.parse(request.params.deviceId);
+  const result = await pool.query('DELETE FROM devices WHERE device_id=$1', [deviceId]);
+  if (!result.rowCount) return reply.code(404).send({ error: 'Smart lock not found' });
+  for (const socket of deviceSockets.get(deviceId) ?? []) {
+    try {
+      if (socket.readyState === 1) socket.send(JSON.stringify({ type: 'sync', serverUnixSeconds: Math.floor(Date.now() / 1000), users: [] }));
+    } catch (error) {
+      app.log.error(error, 'Could not clear deleted controller permissions');
+    }
+    socket.close();
+  }
+  deviceSockets.delete(deviceId);
+  broadcast('devices_changed', { deviceId });
+  broadcast('access_changed', { deviceId });
+  broadcast('events_changed', { deviceId });
+  return reply.code(204).send();
 });
 
 app.get('/api/devices', { preHandler: requireAdmin }, async () => {
@@ -767,6 +864,37 @@ app.patch<{ Params: { personId: string } }>(
     }
   },
 );
+
+app.delete<{ Params: { personId: string } }>('/api/people/:personId', { preHandler: requireAdmin }, async (request, reply) => {
+  const personId = z.string().uuid().parse(request.params.personId);
+  const client = await pool.connect();
+  let affected: string[] = [];
+  try {
+    await client.query('BEGIN');
+    const person = await client.query('SELECT 1 FROM people WHERE person_id=$1 FOR UPDATE', [personId]);
+    if (!person.rowCount) {
+      await client.query('ROLLBACK');
+      return reply.code(404).send({ error: 'Person not found' });
+    }
+    const grants = await client.query<{ deviceId: string }>('SELECT DISTINCT device_id AS "deviceId" FROM access_grants WHERE person_id=$1', [personId]);
+    affected = grants.rows.map(row => row.deviceId);
+    // Remove legacy rows too, otherwise startup migration would recreate this person.
+    await client.query('DELETE FROM access_users WHERE user_id=$1', [personId]);
+    await client.query('DELETE FROM people WHERE person_id=$1', [personId]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  broadcast('people_changed', { personId });
+  broadcast('access_changed', { personId });
+  for (const deviceId of affected) {
+    void pushControllerSync(deviceId).catch(error => app.log.error(error, 'Deleted person sync failed'));
+  }
+  return reply.code(204).send();
+});
 
 type GrantInput = {
   personId?: string;
@@ -922,6 +1050,23 @@ app.post('/api/access-grants', { preHandler: requireAdmin }, async (request, rep
     deviceId: grant.deviceId,
     schedule: grant.schedule,
   });
+});
+
+app.patch<{ Params: { grantId: string } }>('/api/access-grants/:grantId', { preHandler: requireAdmin }, async (request, reply) => {
+  const grantId = z.string().uuid().parse(request.params.grantId);
+  const { schedule } = z.object({ schedule: scheduleSchema }).strict().parse(request.body);
+  const result = await pool.query<{ deviceId: string; personId: string }>(
+    `UPDATE access_grants SET access_type=$2, days_mask=$3, start_minute=$4,
+       end_minute=$5, valid_from=$6, valid_until=$7
+     WHERE grant_id=$1 AND revoked_at IS NULL
+     RETURNING device_id AS "deviceId", person_id AS "personId"`,
+    [grantId, schedule.accessType, schedule.daysMask, schedule.startMinute, schedule.endMinute, schedule.validFrom, schedule.validUntil],
+  );
+  const row = result.rows[0];
+  if (!row) return reply.code(404).send({ error: 'Active access grant not found' });
+  broadcast('access_changed', row);
+  void pushControllerSync(row.deviceId).catch(error => app.log.error(error, 'Updated grant sync failed'));
+  return reply.code(204).send();
 });
 
 app.delete<{ Params: { grantId: string } }>(

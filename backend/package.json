@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "bun dist/src/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "test:integration": "tsx --env-file-if-exists=.env --test test/crud.integration.ts"
   },
   "dependencies": {
     "@fastify/cors": "latest",

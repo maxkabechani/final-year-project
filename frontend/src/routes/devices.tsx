@@ -1,9 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
 import type { ColumnDef } from '@tanstack/react-table'
-import { Bluetooth, Copy, DoorOpen, MoreHorizontal, Plus, ShieldCheck } from 'lucide-react'
+import { Bluetooth, Copy, DoorOpen, MoreHorizontal, Pencil, Plus, ShieldCheck } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 import { DataTable } from '@/components/DataTable'
+import { ConfirmAction } from '@/components/ConfirmAction'
 import { PageError } from '@/components/PageState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
@@ -13,7 +14,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Input } from '@/components/ui/input'
 import type { Device } from '@/lib/api'
 import { useAdminConfig } from '@/lib/config'
-import { useDevices, useEnablePairing, useRegisterDevice } from '@/lib/queries'
+import { useDevices, useEnablePairing, useManageResource, useRegisterDevice } from '@/lib/queries'
 
 export const Route = createFileRoute('/devices')({
   head: () => ({
@@ -33,6 +34,8 @@ function DevicesPage() {
   const devices = useDevices()
   const register = useRegisterDevice()
   const pairing = useEnablePairing()
+  const manage = useManageResource('devices')
+  const [editing, setEditing] = useState(false)
   const [deviceId, setDeviceId] = useState('front-door-01')
   const [name, setName] = useState('Front Door')
   const [location, setLocation] = useState('Main Building')
@@ -87,6 +90,13 @@ function DevicesPage() {
       enableSorting: false,
       cell: ({ row }) => (
         <div className="flex items-center justify-end gap-2">
+          <Button type="button" variant="ghost" size="sm" aria-label={`Edit ${row.original.name}`} onClick={() => {
+            manage.reset(); setEditing(true); setDeviceId(row.original.deviceId); setName(row.original.name); setLocation(row.original.location)
+            document.getElementById('device-name')?.focus()
+          }}><Pencil /> Edit</Button>
+          <ConfirmAction name={row.original.name} disabled={manage.isPending}
+            description="This permanently deletes the lock, its access assignments and activity history, and invalidates its device token. An offline controller keeps cached permissions until reconfigured."
+            onConfirm={async () => { await manage.mutateAsync({ id: row.original.deviceId, method: 'DELETE' }); setEditing(false) }} />
           <Button
             type="button"
             variant="outline"
@@ -117,10 +127,17 @@ function DevicesPage() {
         </div>
       ),
     },
-  ], [pairing.isPending, pairing.mutate, pairing.variables])
+  ], [pairing.isPending, pairing.mutate, pairing.variables, manage.isPending, manage.mutateAsync, manage.reset])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    if (editing) {
+      try {
+        await manage.mutateAsync({ id: deviceId, method: 'PATCH', body: { name: name.trim(), location: location.trim() } })
+        setEditing(false); setDeviceId(''); setName(''); setLocation('')
+      } catch { /* Keep the API error visible in the form. */ }
+      return
+    }
     const result = await register.mutateAsync({ deviceId: deviceId.trim(), name: name.trim(), location: location.trim() })
     setNewToken(result.deviceToken)
   }
@@ -135,13 +152,15 @@ function DevicesPage() {
 
       <div className="grid min-w-0 max-w-full grid-cols-1 gap-4 px-4 lg:grid-cols-2 lg:px-6">
         <Card>
-          <CardHeader><CardTitle>Register smart lock</CardTitle><CardDescription>Create the lock identity before flashing its API credentials.</CardDescription></CardHeader>
+          <CardHeader><CardTitle>{editing ? 'Edit smart lock' : 'Register smart lock'}</CardTitle><CardDescription>{editing ? 'Update the name and location. The controller ID and token stay unchanged.' : 'Create the lock identity before flashing its API credentials.'}</CardDescription></CardHeader>
           <CardContent>
             <form className="space-y-4" onSubmit={submit}>
-              <div className="grid gap-2"><label htmlFor="device-id" className="text-sm font-medium">Controller ID</label><Input id="device-id" value={deviceId} onChange={(e) => setDeviceId(e.target.value)} minLength={3} maxLength={40} pattern="[A-Za-z0-9._-]+" required /></div>
+              <div className="grid gap-2"><label htmlFor="device-id" className="text-sm font-medium">Controller ID</label><Input id="device-id" value={deviceId} onChange={(e) => setDeviceId(e.target.value)} disabled={editing} minLength={3} maxLength={40} pattern="[A-Za-z0-9._-]+" required /></div>
               <div className="grid gap-2"><label htmlFor="device-name" className="text-sm font-medium">Door / lock name</label><Input id="device-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} required /></div>
               <div className="grid gap-2"><label htmlFor="device-location" className="text-sm font-medium">Room / location</label><Input id="device-location" value={location} onChange={(e) => setLocation(e.target.value)} maxLength={160} placeholder="e.g. Server room, Block A" /></div>
-              <Button type="submit" disabled={register.isPending}><Plus />{register.isPending ? 'Registering…' : 'Register smart lock'}</Button>
+              <Button type="submit" disabled={register.isPending || manage.isPending}><Plus />{editing ? (manage.isPending ? 'Saving…' : 'Save lock') : register.isPending ? 'Registering…' : 'Register smart lock'}</Button>
+              {editing && <Button type="button" variant="outline" disabled={manage.isPending} onClick={() => { setEditing(false); manage.reset(); setDeviceId(''); setName(''); setLocation('') }}>Cancel</Button>}
+              {editing && manage.error && <PageError error={manage.error} />}
               {register.error && <PageError error={register.error} />}
             </form>
           </CardContent>

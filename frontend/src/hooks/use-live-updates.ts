@@ -57,6 +57,9 @@ export function useLiveUpdates() {
           if (message.type === 'events_changed') {
             void queryClient.invalidateQueries({ queryKey: ['events'] })
           }
+          if (message.type === 'admins_changed') {
+            void queryClient.invalidateQueries({ queryKey: ['admins'] })
+          }
         } catch {
           // Ignore malformed frames.
         }

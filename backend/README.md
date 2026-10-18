@@ -31,3 +31,19 @@ Administrative endpoints use the `ADMIN_TOKEN` bearer token. Device endpoints us
 
 Door authorization remains local to the ESP32 after synchronization so a backend outage does not disable enrolled BLE access.
 - `PATCH /api/people/:personId`: administrator session required; update a person's name and student number in place. Blank or null student numbers are stored as missing. Existing person ID, credentials, phone sessions, and grants are preserved. Duplicate student numbers return HTTP 409.
+- `PATCH /api/devices/:deviceId`: update lock name/location while preserving the controller ID/token.
+- `DELETE /api/devices/:deviceId`: delete the lock, its assignments and device-specific activity history; invalidate its token and close its controller sockets.
+- `DELETE /api/people/:personId`: delete the identity, phone sessions, legacy enrollment rows and grants; push refreshed permissions to connected affected locks. Offline locks apply revocations after reconnecting.
+- `PATCH /api/access-grants/:grantId`: edit an existing assignment's schedule without changing its person or lock.
+- `PATCH /api/admins/:adminId`: owner-only update of name, email and role. A role change revokes the target's sessions.
+- `DELETE /api/admins/:adminId`: owner-only account deletion and session invalidation. Self-deletion and removing the last owner are rejected. Raw Better Auth admin HTTP endpoints are blocked so these checks cannot be bypassed.
+
+Dashboard deletions require confirmation. Student identity creation remains in the Android app registration flow; administrators can edit or delete the resulting identity. Activity events have no standalone edit/delete operations.
+
+The backend CI job starts an isolated PostgreSQL database and runs `bun run test:integration`
+against the running API. Locally, set `DATABASE_URL` to a disposable database whose name
+ends in `_test`, start this API against that same database, and run the command with
+`TEST_API_URL` pointing to its local origin. The suite requires the bootstrap owner's
+`BETTER_AUTH_OWNER_EMAIL` and `BETTER_AUTH_OWNER_PASSWORD`. It verifies CRUD, session
+invalidation, controller permission updates, legacy migration cleanup, and concurrent
+last-owner protection. Never point this suite at a shared development or production database.

@@ -23,6 +23,24 @@ export function useDevices() {
   })
 }
 
+export function useManageResource(resource: 'devices' | 'people' | 'admins' | 'access-grants') {
+  const { config } = useAdminConfig()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { id: string; method: 'PATCH' | 'DELETE'; body?: unknown }) =>
+      apiRequest<void>(config, `/api/${resource}/${encodeURIComponent(input.id)}`, {
+        method: input.method,
+        ...(input.body ? { body: JSON.stringify(input.body) } : {}),
+      }),
+    onSuccess: (_result, input) => {
+      for (const key of ['devices', 'people', 'access-grants', 'users', 'events', 'admins']) {
+        void queryClient.invalidateQueries({ queryKey: [key] })
+      }
+      toast.success(input.method === 'DELETE' ? 'Deleted successfully' : 'Changes saved')
+    },
+  })
+}
+
 export function usePeople() {
   const { config, configured } = useAdminConfig()
   return useQuery({
