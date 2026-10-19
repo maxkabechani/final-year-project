@@ -7,6 +7,33 @@ const apiBaseUrl = String.fromEnvironment(
   defaultValue: 'https://api-project.maxkabechani.dev',
 );
 
+const accessUtcOffset = Duration(hours: 2);
+
+enum GrantAvailability { allowed, notStarted, expired, wrongDay, outsideHours }
+
+// Use the last server calibration offline, then advance monotonically so a
+// phone clock adjustment cannot change the schedule during this app session.
+class MobileAccessClock {
+  MobileAccessClock({DateTime Function()? deviceNow, Duration Function()? elapsed})
+      : _deviceNow = deviceNow ?? DateTime.now {
+    _elapsed = elapsed ?? () => _stopwatch.elapsed;
+    _stopwatch.start();
+  }
+
+  final DateTime Function() _deviceNow;
+  final Stopwatch _stopwatch = Stopwatch();
+  late final Duration Function() _elapsed;
+  DateTime? _anchor;
+  Duration _anchorElapsed = Duration.zero;
+
+  void restoreOffset(int offsetMilliseconds) {
+    _anchor = _deviceNow().toUtc().add(Duration(milliseconds: offsetMilliseconds));
+    _anchorElapsed = _elapsed();
+  }
+
+  DateTime now() => _anchor?.add(_elapsed() - _anchorElapsed) ?? _deviceNow().toUtc();
+}
+
 class MobilePerson {
   const MobilePerson({
     required this.personId,
@@ -86,16 +113,30 @@ class MobileGrant {
         'validUntil': validUntil,
       };
 
-  bool allowsAt(DateTime localTime) {
-    final unixSeconds = localTime.millisecondsSinceEpoch ~/ 1000;
-    if (unixSeconds < validFrom) return false;
-    if (validUntil != null && unixSeconds >= validUntil!) return false;
+  GrantAvailability availabilityAt(DateTime instant) {
+    final unixSeconds = instant.millisecondsSinceEpoch ~/ 1000;
+    if (unixSeconds < validFrom) return GrantAvailability.notStarted;
+    if (validUntil != null && unixSeconds >= validUntil!) return GrantAvailability.expired;
 
+    // Match ESP32 scheduleAllows: Monday bit 0, Zambia time, [start, end).
+    final localTime = instant.toUtc().add(accessUtcOffset);
     final dayBit = 1 << (localTime.weekday - 1);
     final minute = localTime.hour * 60 + localTime.minute;
-    return (daysMask & dayBit) != 0 &&
-        minute >= startMinute &&
-        minute < endMinute;
+    if ((daysMask & dayBit) == 0) return GrantAvailability.wrongDay;
+    if (minute < startMinute || minute >= endMinute) return GrantAvailability.outsideHours;
+    return GrantAvailability.allowed;
+  }
+
+  bool allowsAt(DateTime instant) => availabilityAt(instant) == GrantAvailability.allowed;
+
+  String get scheduleLabel {
+    const days = <String>['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final selected = <String>[
+      for (var day = 0; day < days.length; day++)
+        if ((daysMask & (1 << day)) != 0) days[day],
+    ];
+    String time(int minute) => '${(minute ~/ 60).toString().padLeft(2, '0')}:${(minute % 60).toString().padLeft(2, '0')}';
+    return '${selected.join(', ')} · ${time(startMinute)}–${time(endMinute)} · Zambia time';
   }
 }
 
@@ -105,21 +146,27 @@ class MobileAccessSnapshot {
     required this.credentialKeyHex,
     required this.serverUnixSeconds,
     required this.grants,
+    this.clockOffsetMilliseconds = 0,
   });
 
   final MobilePerson person;
   final String credentialKeyHex;
   final int serverUnixSeconds;
   final List<MobileGrant> grants;
+  final int clockOffsetMilliseconds;
 
-  factory MobileAccessSnapshot.fromJson(Map<String, dynamic> json) {
+  factory MobileAccessSnapshot.fromJson(Map<String, dynamic> json, {DateTime? receivedAt}) {
     final rawGrants = json['grants'];
+    final serverUnixSeconds = (json['serverUnixSeconds'] as num?)?.toInt() ?? 0;
     return MobileAccessSnapshot(
       person: MobilePerson.fromJson(
         Map<String, dynamic>.from(json['person'] as Map? ?? const <String, dynamic>{}),
       ),
       credentialKeyHex: json['credentialKeyHex']?.toString() ?? '',
-      serverUnixSeconds: (json['serverUnixSeconds'] as num?)?.toInt() ?? 0,
+      serverUnixSeconds: serverUnixSeconds,
+      clockOffsetMilliseconds: receivedAt != null && serverUnixSeconds > 0
+          ? serverUnixSeconds * 1000 - receivedAt.millisecondsSinceEpoch
+          : (json['clockOffsetMilliseconds'] as num?)?.toInt() ?? 0,
       grants: rawGrants is List
           ? rawGrants
               .whereType<Map>()
@@ -133,6 +180,7 @@ class MobileAccessSnapshot {
         'person': person.toJson(),
         'credentialKeyHex': credentialKeyHex,
         'serverUnixSeconds': serverUnixSeconds,
+        'clockOffsetMilliseconds': clockOffsetMilliseconds,
         'grants': grants.map((grant) => grant.toJson()).toList(),
       };
 
@@ -213,7 +261,7 @@ class MobileApi {
       );
     }
 
-    return MobileAccessSnapshot.fromJson(body);
+    return MobileAccessSnapshot.fromJson(body, receivedAt: DateTime.now());
   }
 
   Map<String, dynamic> _decode(http.Response response) {
@@ -237,3 +285,4 @@ class MobileApiException implements Exception {
   @override
   String toString() => message;
 }
+

@@ -341,6 +341,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install
+      - run: bun test test/*.test.ts
       - run: bun run build
   publish-ios:
     name: Publish iOS download
@@ -380,3 +381,4 @@ jobs:
               --title "Smart Access iOS Test Build" \
               --notes-file ios-release-notes.md
           fi
+

@@ -93,7 +93,7 @@ class AccessHomePage extends StatefulWidget {
   State<AccessHomePage> createState() => _AccessHomePageState();
 }
 
-class _AccessHomePageState extends State<AccessHomePage> {
+class _AccessHomePageState extends State<AccessHomePage> with WidgetsBindingObserver {
   static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
   static final LocalAuthentication _localAuth = LocalAuthentication();
 
@@ -102,6 +102,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
   static const _accessCacheKey = 'smart-access.access-cache';
 
   final MobileApi _api = MobileApi();
+  final MobileAccessClock _accessClock = MobileAccessClock();
   final Map<String, NearbyDoor> _doors = <String, NearbyDoor>{};
 
   StreamSubscription<List<ScanResult>>? _scanSubscription;
@@ -111,6 +112,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
   Completer<List<int>>? _pendingMessage;
   int? _pendingOpcode;
   Timer? _accessTimer;
+  Timer? _scheduleTimer;
   Timer? _recentSuccessTimer;
 
   bool _initializing = true;
@@ -126,14 +128,30 @@ class _AccessHomePageState extends State<AccessHomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _scheduleTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _access != null) setState(() {});
+    });
     unawaited(_initialize());
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !_initializing) {
+      final access = _access;
+      if (access != null) _accessClock.restoreOffset(access.clockOffsetMilliseconds);
+      setState(() {});
+      unawaited(_syncAccess(silent: true));
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _scanSubscription?.cancel();
     _messageSubscription?.cancel();
     _accessTimer?.cancel();
+    _scheduleTimer?.cancel();
     _recentSuccessTimer?.cancel();
     FlutterBluePlus.stopScan();
     _api.close();
@@ -165,6 +183,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
       }
     }
 
+    if (snapshot != null) _accessClock.restoreOffset(snapshot.clockOffsetMilliseconds);
     if (!mounted) return;
     setState(() {
       _installationId = installationId;
@@ -257,6 +276,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
     if (mounted) setState(() => _syncing = true);
     try {
       final snapshot = await _api.fetchAccess(token);
+      _accessClock.restoreOffset(snapshot.clockOffsetMilliseconds);
       await _secureStorage.write(
         key: _accessCacheKey,
         value: jsonEncode(snapshot.toJson()),
@@ -578,7 +598,7 @@ class _AccessHomePageState extends State<AccessHomePage> {
       _showMessage('You do not have access to this door.', error: true);
       return;
     }
-    if (!grant.allowsAt(DateTime.now())) {
+    if (!grant.allowsAt(_accessClock.now())) {
       _showMessage('Your access is not active at this time.', error: true);
       return;
     }
@@ -821,7 +841,8 @@ class _AccessHomePageState extends State<AccessHomePage> {
             else
               ...doors.map((door) {
                 final grant = _access?.grantFor(door.deviceId);
-                final allowedNow = grant?.allowsAt(DateTime.now()) ?? false;
+                final availability = grant?.availabilityAt(_accessClock.now());
+                final allowedNow = availability == GrantAvailability.allowed;
                 final busy = _busyDoorId == door.deviceId;
                 final justUnlocked = _recentlyUnlockedDoorId == door.deviceId;
                 final title = grant?.deviceName.isNotEmpty == true
@@ -831,10 +852,14 @@ class _AccessHomePageState extends State<AccessHomePage> {
                 String status;
                 if (grant == null) {
                   status = 'No access';
-                } else if (!allowedNow) {
-                  status = 'Outside allowed time';
                 } else {
-                  status = 'Ready to unlock';
+                  status = switch (availability!) {
+                    GrantAvailability.allowed => 'Ready to unlock',
+                    GrantAvailability.notStarted => 'Access starts later',
+                    GrantAvailability.expired => 'Access expired',
+                    GrantAvailability.wrongDay => 'Not allowed today',
+                    GrantAvailability.outsideHours => 'Outside allowed hours',
+                  };
                 }
 
                 return Padding(
@@ -888,6 +913,11 @@ class _AccessHomePageState extends State<AccessHomePage> {
                                     ),
                                   ],
                                   const SizedBox(height: 5),
+                                  if (grant != null) ...<Widget>[
+                                    Text(grant.scheduleLabel,
+                                      style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                                    const SizedBox(height: 5),
+                                  ],
                                   Row(
                                     children: <Widget>[
                                       Icon(
@@ -1111,3 +1141,4 @@ class _RegistrationPageState extends State<RegistrationPage> {
     );
   }
 }
+

@@ -1,3 +1,5 @@
+import { accessDayMask } from './access-time'
+
 export type Device = {
   deviceId: string
   name: string
@@ -118,11 +120,7 @@ export const daysLabel = (mask: number): string => {
   return labels.filter((_, index) => Boolean(mask & (1 << index))).join(', ')
 }
 
-export const dayMaskFromDate = (value: Date): number => {
-  const jsDay = value.getDay()
-  const mondayFirst = jsDay === 0 ? 6 : jsDay - 1
-  return 1 << mondayFirst
-}
+export const dayMaskFromDate = accessDayMask
 
 export const grantState = (grant: AccessGrant): 'active' | 'expired' => {
   if (grant.validUntil !== null && grant.validUntil <= Math.floor(Date.now() / 1000)) {
@@ -130,3 +128,4 @@ export const grantState = (grant: AccessGrant): 'active' | 'expired' => {
   }
   return 'active'
 }
+

@@ -103,7 +103,9 @@ The firmware rate-limits incorrect pairing PIN attempts and exits pairing mode a
 
 ## Access schedule
 
-The controller evaluates the DS3231 clock in Africa/Lusaka local time (UTC+02:00). A credential is valid only when its date range, day mask, and time interval all match. The interval is start-inclusive and end-exclusive. Schedules that cross midnight should be split into two intervals by the administrator.
+The dashboard, mobile app, and controller all interpret schedule dates, weekdays, and minutes of day in Africa/Lusaka time (UTC+02:00), regardless of the browser or phone timezone. `validFrom` and `validUntil` remain absolute Unix seconds in UTC. A credential is valid only when its date range, day mask, and time interval all match. The interval is start-inclusive and end-exclusive. `endMinute: 1440` means midnight at the end of the selected day. Schedules that cross midnight should be split into two intervals by the administrator.
+
+The app calibrates its clock from `serverUnixSeconds` when fetching access and advances it monotonically during the app session. It caches the server-to-phone clock offset for offline restarts, rather than treating a cached server timestamp as the current time. The app displays the assigned schedule and distinguishes access that has not started, expired, or falls on another day. The controller remains the final authority for unlocking.
 
 The RTC stores UTC. A trusted HTTPS device sync may set it from the backend time endpoint. On a first-time offline installation, successful physical enrollment can initialize an invalid RTC from the administrator phone's valid-from timestamp. Keep the RTC backup battery installed after setup.
 
@@ -114,3 +116,4 @@ Encrypted result plaintext status values are 0x10 granted, 0x11 invalid or unkno
 ## Event synchronization
 
 The controller records grants, denials, exits, and door state changes in a bounded flash queue. Wi-Fi sends queued events to the backend when available. API access is not part of the BLE unlock decision.
+

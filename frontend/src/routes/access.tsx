@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { dayMaskFromDate, daysLabel, grantState, minutesToTime, timeToMinutes, type AccessGrant, type AccessSchedule, type AccessType } from '@/lib/api'
+import { accessDate, accessDateTime } from '@/lib/access-time'
 import { useAdminConfig } from '@/lib/config'
 import { useAccessGrants, useDevices, useGrantAccess, useManageResource, usePeople, useRevokeGrant } from '@/lib/queries'
 
@@ -55,7 +56,7 @@ function AccessPage() {
   const [deviceId, setDeviceId] = useState('')
   const [accessType, setAccessType] = useState<AccessType>('recurring')
   const [selectedDays, setSelectedDays] = useState<string[]>(['0', '1', '2', '3', '4'])
-  const [oneOffDate, setOneOffDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [oneOffDate, setOneOffDate] = useState(() => accessDate(new Date()))
   const [startTime, setStartTime] = useState('08:00')
   const [endTime, setEndTime] = useState('18:00')
 
@@ -106,7 +107,7 @@ function AccessPage() {
       header: 'Schedule',
       cell: ({ row }) => (
         <div>
-          <div>{row.original.accessType === 'one_off' ? new Date(row.original.validFrom * 1000).toLocaleDateString() : daysLabel(row.original.daysMask)}</div>
+          <div>{row.original.accessType === 'one_off' ? accessDate(new Date(row.original.validFrom * 1000)) : daysLabel(row.original.daysMask)}</div>
           <div className="text-xs tabular-nums text-muted-foreground">{minutesToTime(row.original.startMinute)}–{minutesToTime(row.original.endMinute)}</div>
         </div>
       ),
@@ -130,8 +131,7 @@ function AccessPage() {
             updateGrant.reset(); setEditingGrantId(grant.grantId); setPersonId(grant.personId); setDeviceId(grant.deviceId)
             setAccessType(grant.accessType); setStartTime(minutesToTime(grant.startMinute)); setEndTime(minutesToTime(grant.endMinute))
             setSelectedDays(dayOptions.filter(day => (grant.daysMask & (1 << Number(day.value))) !== 0).map(day => day.value))
-            const date = new Date(grant.validFrom * 1000)
-            setOneOffDate(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`)
+            setOneOffDate(accessDate(new Date(grant.validFrom * 1000)))
             document.getElementById('access-assignment')?.scrollIntoView({ behavior: 'smooth' })
           }}><Pencil /> Edit</Button>
           <ConfirmAction name={`access for ${row.original.personName}`} label="Revoke" disabled={revoke.isPending}
@@ -164,8 +164,8 @@ function AccessPage() {
         validUntil: editingGrantId ? (grants.data?.find(grant => grant.grantId === editingGrantId && grant.accessType === 'recurring')?.validUntil ?? null) : null,
       }
     } else {
-      const start = new Date(`${oneOffDate}T${startTime}:00`)
-      const end = new Date(`${oneOffDate}T${endTime}:00`)
+      const start = accessDateTime(oneOffDate, startTime)
+      const end = accessDateTime(oneOffDate, endTime)
       if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
         return toast.error('Choose a valid one-off date and time window')
       }
@@ -210,7 +210,7 @@ function AccessPage() {
         <Card id="access-assignment">
           <CardHeader>
             <CardTitle>{editingGrantId ? 'Edit access assignment' : 'Access assignment'}</CardTitle>
-            <CardDescription>A person can have different schedules on different smart locks.</CardDescription>
+            <CardDescription>All dates and times use Zambia time (UTC+02:00). Access starts at the From time and ends at the Until time.</CardDescription>
           </CardHeader>
           <CardContent>
             <form className="space-y-5" onSubmit={submit}>
@@ -350,3 +350,4 @@ function AccessPage() {
     </div>
   )
 }
+
