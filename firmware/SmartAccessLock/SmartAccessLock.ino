@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <HTTPClient.h>
 #include "BLEDevice.h"
 #include "BLEServer.h"
 #include "BLEUtils.h"
@@ -10,6 +9,7 @@
 #include <WiFiClientSecure.h>
 #include <WebSocketsClient.h>
 #include <esp_system.h>
+#include <algorithm>
 #include <mbedtls/ecdh.h>
 #include <mbedtls/ecp.h>
 #include <mbedtls/gcm.h>
@@ -113,12 +113,48 @@ uint32_t lockoutExpiresAt = 0;
 uint32_t unlockUntil = 0;
 uint32_t lastWifiReconnectAt = 0;
 uint32_t lastWsHeartbeatAt = 0;
+uint32_t lastWsAuthAt = 0;
+uint32_t lastWsAckAt = 0;
+uint32_t lastWsStartAttemptAt = 0;
+uint32_t backendReconnectDelayMs = 5000;
 uint32_t lastEventUploadAt = 0;
 bool serverTimeSyncedThisBoot = false;
 bool backendSocketStarted = false;
 bool backendSocketAuthenticated = false;
 int lastWifiStatus = -1;
-WebSocketsClient backendSocket;
+char pendingEventRequestId[37] = "";
+String pendingEventMessage;
+std::vector<String> pendingEventIds;
+
+// The library normally destroys the TLS client before reporting a generic
+// "TCP connection cleanup". Read its actual error before that cleanup happens.
+class BackendWebSocketClient : public WebSocketsClient {
+ public:
+  void poll() {
+    const bool attempting = _client.status == WSC_NOT_CONNECTED &&
+        static_cast<uint32_t>(millis() - _lastConnectionFail) >= _reconnectInterval;
+    const uint32_t startedAt = millis();
+    if (attempting) {
+      Serial.printf("Backend connect attempt: freeHeap=%u largestBlock=%u RSSI=%d\n",
+                    ESP.getFreeHeap(), ESP.getMaxAllocHeap(), WiFi.RSSI());
+    }
+    WebSocketsClient::loop();
+    if (attempting && _client.status == WSC_NOT_CONNECTED && _client.ssl != nullptr) {
+      char errorText[160] = {};
+      const int error = _client.ssl->lastError(errorText, sizeof(errorText));
+      Serial.printf("Backend TCP/TLS connect failed: code=%d detail=%s elapsed=%lu ms freeHeap=%u largestBlock=%u\n",
+                    error, errorText, static_cast<unsigned long>(millis() - startedAt),
+                    ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      clientDisconnect(&_client, "TCP/TLS connection failed");
+    }
+  }
+
+  void resetTransport(const char *reason) {
+    clientDisconnect(&_client, reason);
+  }
+};
+
+BackendWebSocketClient backendSocket;
 
 static int secureRandom(void *, unsigned char *output, size_t length) {
   esp_fill_random(output, length);
@@ -735,45 +771,6 @@ static void setupBle() {
   Serial.printf("BLE advertising as %s\n", advertisedName.c_str());
 }
 
-static String backendRoot(const char *path) {
-  String root = SMART_LOCK_BACKEND_URL;
-  while (root.endsWith("/")) root.remove(root.length() - 1);
-  return root + path;
-}
-
-static bool backendReady() {
-  return strlen(SMART_LOCK_BACKEND_URL) > 8 &&
-         strlen(SMART_LOCK_DEVICE_TOKEN) > 16 &&
-         WiFi.status() == WL_CONNECTED;
-}
-
-static void probeBackendHealth() {
-  if (WiFi.status() != WL_CONNECTED) return;
-
-  WiFiClientSecure client;
-  client.setInsecure();
-  client.setTimeout(8000);
-  HTTPClient http;
-  const String url = backendRoot("/health");
-  http.setConnectTimeout(8000);
-  http.setTimeout(8000);
-  if (!http.begin(client, url)) {
-    Serial.println("Backend health probe setup failed.");
-    return;
-  }
-
-  const int status = http.GET();
-  if (status >= 200 && status < 300) {
-    Serial.printf("Backend HTTPS reachable: HTTP %d\n", status);
-  } else if (status < 0) {
-    Serial.printf("Backend HTTPS probe failed: %s\n",
-                  HTTPClient::errorToString(status).c_str());
-  } else {
-    Serial.printf("Backend HTTPS probe returned HTTP %d\n", status);
-  }
-  http.end();
-}
-
 static bool applySyncDocument(JsonDocument &document) {
   const uint32_t unixSeconds = document["serverUnixSeconds"] | 0U;
   if (unixSeconds >= 1700000000U) {
@@ -871,6 +868,8 @@ static void handleBackendWebSocketEvent(WStype_t type, uint8_t *payload, size_t 
   switch (type) {
     case WStype_CONNECTED:
       backendSocketAuthenticated = false;
+      lastWsAuthAt = millis();
+      lastWsAckAt = millis();
       Serial.println("Backend WebSocket connected; authenticating...");
       sendWebSocketAuth();
       break;
@@ -882,6 +881,11 @@ static void handleBackendWebSocketEvent(WStype_t type, uint8_t *payload, size_t 
       }
       Serial.println();
       backendSocketAuthenticated = false;
+      backendReconnectDelayMs = std::min(backendReconnectDelayMs * 2U, 60000U);
+      backendSocket.setReconnectInterval(backendReconnectDelayMs);
+      Serial.printf("Backend retry in %lu ms; freeHeap=%u largestBlock=%u\n",
+                    static_cast<unsigned long>(backendReconnectDelayMs),
+                    ESP.getFreeHeap(), ESP.getMaxAllocHeap());
       break;
     case WStype_ERROR:
       Serial.print("Backend WebSocket error");
@@ -893,26 +897,47 @@ static void handleBackendWebSocketEvent(WStype_t type, uint8_t *payload, size_t 
       backendSocketAuthenticated = false;
       break;
     case WStype_TEXT: {
-      String text;
-      text.reserve(length);
-      for (size_t i = 0; i < length; ++i) text += static_cast<char>(payload[i]);
-
       JsonDocument document;
-      if (deserializeJson(document, text) != DeserializationError::Ok) {
+      if (deserializeJson(document, reinterpret_cast<const char *>(payload), length) != DeserializationError::Ok) {
         Serial.println("Backend WebSocket sent invalid JSON.");
         return;
       }
 
       const char *messageType = document["type"] | "";
       if (strcmp(messageType, "sync") == 0) {
-        backendSocketAuthenticated = true;
         if (!applySyncDocument(document)) {
           Serial.println("Backend WebSocket sync payload was invalid.");
+          backendSocket.disconnect();
+          return;
         }
-      } else if (strcmp(messageType, "heartbeat_ack") == 0) {
         backendSocketAuthenticated = true;
+        backendReconnectDelayMs = 5000;
+        backendSocket.setReconnectInterval(backendReconnectDelayMs);
+        lastWsAckAt = millis();
+        lastWsHeartbeatAt = millis();
+      } else if (strcmp(messageType, "heartbeat_ack") == 0 && backendSocketAuthenticated) {
+        lastWsAckAt = millis();
         const uint32_t unixSeconds = document["serverUnixSeconds"] | 0U;
         if (unixSeconds >= 1700000000U) setSoftwareClock(unixSeconds, false);
+      } else if (strcmp(messageType, "events_ack") == 0 && backendSocketAuthenticated) {
+        const char *requestId = document["requestId"] | "";
+        JsonArray acknowledged = document["eventIds"].as<JsonArray>();
+        if (pendingEventMessage.length() == 0 || acknowledged.isNull() ||
+            strcmp(requestId, pendingEventRequestId) != 0) return;
+        const size_t before = events.size();
+        events.erase(std::remove_if(events.begin(), events.end(), [&](const EventRecord &event) {
+          if (std::find(pendingEventIds.begin(), pendingEventIds.end(), String(event.eventId)) == pendingEventIds.end()) return false;
+          for (JsonVariant id : acknowledged) {
+            if (strcmp(id.as<const char *>() == nullptr ? "" : id.as<const char *>(), event.eventId) == 0) return true;
+          }
+          return false;
+        }), events.end());
+        saveEvents();
+        pendingEventMessage = "";
+        pendingEventIds.clear();
+        pendingEventRequestId[0] = '\0';
+        Serial.printf("Queued access events acknowledged: %u; remaining=%u\n",
+                      static_cast<unsigned>(before - events.size()), static_cast<unsigned>(events.size()));
       } else if (strcmp(messageType, "enable_pairing") == 0 && backendSocketAuthenticated) {
         const char *requestId = document["requestId"] | "";
         if (strlen(requestId) != 36) return;
@@ -929,6 +954,7 @@ static void handleBackendWebSocketEvent(WStype_t type, uint8_t *payload, size_t 
         backendSocket.sendTXT(response);
       } else if (strcmp(messageType, "auth_error") == 0) {
         Serial.println("Backend WebSocket authentication failed.");
+        backendReconnectDelayMs = 60000;
         backendSocketAuthenticated = false;
         backendSocket.disconnect();
       }
@@ -941,6 +967,9 @@ static void handleBackendWebSocketEvent(WStype_t type, uint8_t *payload, size_t 
 
 static void startBackendWebSocket() {
   if (backendSocketStarted || strlen(SMART_LOCK_DEVICE_TOKEN) <= 16) return;
+  if (lastWsStartAttemptAt != 0 &&
+      static_cast<uint32_t>(millis() - lastWsStartAttemptAt) < 5000U) return;
+  lastWsStartAttemptAt = millis();
 
   String host;
   String path;
@@ -953,52 +982,19 @@ static void startBackendWebSocket() {
                   host.c_str(), resolved.toString().c_str());
   } else {
     Serial.printf("Backend DNS resolution failed for %s\n", host.c_str());
+    return;
   }
 
   backendSocket.onEvent(handleBackendWebSocketEvent);
-  backendSocket.setReconnectInterval(5000);
-  backendSocket.enableHeartbeat(15000, 3000, 2);
+  backendSocket.beginSSL(host.c_str(), port, path.c_str(), "", "");
+  backendSocket.setReconnectInterval(backendReconnectDelayMs);
+  backendSocket.enableHeartbeat(25000, 15000, 3);
   // Native device clients have no browser origin; remove the library's default
   // Origin: file:// header so the API's dashboard CORS policy accepts the upgrade.
   backendSocket.setExtraHeaders("");
-  backendSocket.beginSSL(host.c_str(), port, path.c_str());
   backendSocketStarted = true;
   Serial.printf("Backend WebSocket starting: wss://%s:%u%s\n",
                 host.c_str(), static_cast<unsigned>(port), path.c_str());
-}
-
-static bool securePost(const String &url, const String &body) {
-  for (uint8_t attempt = 1; attempt <= 2; ++attempt) {
-    WiFiClientSecure client;
-    client.setInsecure();
-    client.setTimeout(8000);
-    HTTPClient http;
-    http.setConnectTimeout(8000);
-    http.setTimeout(8000);
-    if (!http.begin(client, url)) {
-      Serial.printf("HTTPS POST setup failed: %s\n", url.c_str());
-      return false;
-    }
-    http.addHeader("Authorization", "Bearer " + String(SMART_LOCK_DEVICE_TOKEN));
-    http.addHeader("Content-Type", "application/json");
-    const int status = http.POST(body);
-    if (status >= 200 && status < 300) {
-      http.end();
-      return true;
-    }
-    if (status < 0) {
-      Serial.printf("Backend POST failed: %s (attempt %u/2, %s)\n",
-                    HTTPClient::errorToString(status).c_str(),
-                    static_cast<unsigned>(attempt), url.c_str());
-    } else {
-      Serial.printf("Backend POST failed: HTTP %d (attempt %u/2, %s)\n",
-                    status, static_cast<unsigned>(attempt), url.c_str());
-    }
-    http.end();
-    if (status >= 400 && status < 500) return false;
-    if (attempt < 2) delay(300);
-  }
-  return false;
 }
 
 static void formatIsoUtc(uint32_t timestamp, char output[21]) {
@@ -1014,12 +1010,20 @@ static void formatIsoUtc(uint32_t timestamp, char output[21]) {
 }
 
 static bool syncEvents() {
-  if (events.empty()) return true;
+  if (!backendSocketAuthenticated || events.empty()) return false;
+  if (pendingEventMessage.length() > 0) {
+    return backendSocket.sendTXT(pendingEventMessage);
+  }
   JsonDocument document;
+  document["type"] = "events";
+  makeEventId(pendingEventRequestId);
+  document["requestId"] = pendingEventRequestId;
+  pendingEventIds.clear();
   JsonArray array = document["events"].to<JsonArray>();
   for (const EventRecord &event : events) {
     JsonObject item = array.add<JsonObject>();
     item["eventId"] = event.eventId;
+    pendingEventIds.push_back(String(event.eventId));
     char isoTime[21];
     formatIsoUtc(event.timestamp, isoTime);
     item["occurredAt"] = isoTime;
@@ -1030,13 +1034,9 @@ static bool syncEvents() {
     else item["userId"] = nullptr;
     item["detail"] = event.detail;
   }
-  String body;
-  serializeJson(document, body);
-  const String path = "/api/devices/" + String(SMART_LOCK_DEVICE_ID) + "/events";
-  if (!securePost(backendRoot(path.c_str()), body)) return false;
-  events.clear();
-  saveEvents();
-  return true;
+  serializeJson(document, pendingEventMessage);
+  // Keep the NVS queue until this exact batch is acknowledged after DB commit.
+  return backendSocket.sendTXT(pendingEventMessage);
 }
 
 static bool startPairingWindow() {
@@ -1126,23 +1126,41 @@ void loop() {
     lockoutActive = false;
     pairingFailures = 0;
   }
+  // A TLS reconnect can block for seconds. Finish BLE exchanges and the relay
+  // pulse first so network recovery cannot lengthen an unlock interval.
+  if (unlockUntil != 0 || (sessionActive && !sessionConsumed &&
+      static_cast<uint32_t>(millis() - sessionCreatedAt) < kSessionWindowMs)) {
+    delay(8);
+    return;
+  }
   const int wifiStatus = static_cast<int>(WiFi.status());
   if (wifiStatus != lastWifiStatus) {
     lastWifiStatus = wifiStatus;
     if (wifiStatus == WL_CONNECTED) {
       Serial.printf("Wi-Fi connected. IP=%s RSSI=%d dBm\n",
                     WiFi.localIP().toString().c_str(), WiFi.RSSI());
-      probeBackendHealth();
       startBackendWebSocket();
     } else if (strlen(SMART_LOCK_WIFI_SSID) > 0) {
       Serial.printf("Wi-Fi status changed: %d\n", wifiStatus);
       backendSocketAuthenticated = false;
+      if (backendSocketStarted) backendSocket.resetTransport("Wi-Fi disconnected");
+      backendSocketStarted = false;
     }
   }
 
   if (wifiStatus == WL_CONNECTED) {
     startBackendWebSocket();
-    if (backendSocketStarted) backendSocket.loop();
+    if (backendSocketStarted) backendSocket.poll();
+
+    if (backendSocket.isConnected() && !backendSocketAuthenticated &&
+        static_cast<uint32_t>(millis() - lastWsAuthAt) >= 15000U) {
+      Serial.println("Backend authentication/sync timed out; reconnecting.");
+      backendSocket.resetTransport("Authentication timeout");
+    } else if (backendSocketAuthenticated &&
+               static_cast<uint32_t>(millis() - lastWsAckAt) >= 90000U) {
+      Serial.println("Backend heartbeat acknowledgements stopped; reconnecting.");
+      backendSocket.resetTransport("Heartbeat acknowledgement timeout");
+    }
 
     if (backendSocketAuthenticated &&
         static_cast<uint32_t>(millis() - lastWsHeartbeatAt) >= 30000U) {
@@ -1150,10 +1168,10 @@ void loop() {
       sendWebSocketHeartbeat();
     }
 
-    if (!events.empty() &&
+    if (backendSocketAuthenticated && !events.empty() &&
         static_cast<uint32_t>(millis() - lastEventUploadAt) >= 10000U) {
       lastEventUploadAt = millis();
-      if (syncEvents()) Serial.println("Queued access events uploaded.");
+      syncEvents();
     }
   } else if (strlen(SMART_LOCK_WIFI_SSID) > 0 &&
              static_cast<uint32_t>(millis() - lastWifiReconnectAt) >= 10000U) {

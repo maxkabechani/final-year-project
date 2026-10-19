@@ -30,6 +30,10 @@ The API listens on port 8080 by default.
 Administrative endpoints use the `ADMIN_TOKEN` bearer token. Device endpoints use the one-time token created when a controller is registered.
 
 Door authorization remains local to the ESP32 after synchronization so a backend outage does not disable enrolled BLE access.
+
+Controllers connect to `/ws/device/:deviceId`, send `{ type: "auth", token }`, and receive a full `sync` containing server time and access grants. Messages are handled in arrival order so an immediate heartbeat or event batch waits for authentication. Unauthenticated connections expire after 15 seconds; server ping/pong checks remove broken transports. Incoming frames are limited to 16 KiB.
+
+The current firmware sends `{ type: "events", requestId, events }` over that authenticated connection, using the same event objects as the HTTP endpoint. `events_ack` echoes `requestId` and the committed `eventIds`. The controller can safely retry after a lost acknowledgement or reconnect: event IDs are deduplicated transactionally. Deploy this API before updating controller firmware; `/health` exposes `controllerEventsOverWebSocket: true`.
 - `PATCH /api/people/:personId`: administrator session required; update a person's name and student number in place. Blank or null student numbers are stored as missing. Existing person ID, credentials, phone sessions, and grants are preserved. Duplicate student numbers return HTTP 409.
 - `PATCH /api/devices/:deviceId`: update lock name/location while preserving the controller ID/token.
 - `DELETE /api/devices/:deviceId`: delete the lock, its assignments and device-specific activity history; invalidate its token and close its controller sockets.

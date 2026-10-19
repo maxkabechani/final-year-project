@@ -89,6 +89,72 @@ test('management CRUD, authorization, controller revocation, and owner safeguard
       ws.onerror = reject;
     });
     assert.equal(messages.at(-1)!.users.length, 1);
+
+    // Queue several frames before the auth DB lookup completes. They must be
+    // handled in order, and event retries must never create duplicate rows.
+    const eventId = randomUUID();
+    const batchId = randomUUID();
+    const batch = { type: 'events', requestId: batchId, events: [{
+      eventId, occurredAt: new Date().toISOString(), type: 'denied',
+      userId: null, detail: 'WebSocket reconnect regression',
+    }] };
+    const burst = new WebSocket(`${base.replace(/^http/, 'ws')}/ws/device/${deviceId}`);
+    sockets.push(burst);
+    const received: Array<Record<string, unknown>> = [];
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Auth/heartbeat/event burst timed out')), 5000);
+      burst.onopen = () => {
+        burst.send(JSON.stringify({ type: 'auth', token }));
+        burst.send(JSON.stringify({ type: 'heartbeat' }));
+        burst.send(JSON.stringify(batch));
+      };
+      burst.onmessage = event => {
+        const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+        received.push(message);
+        if (message.type === 'events_ack') { clearTimeout(timer); resolve(); }
+        if (message.type === 'auth_error') { clearTimeout(timer); reject(new Error('Frames raced authentication')); }
+      };
+      burst.onerror = error => { clearTimeout(timer); reject(error); };
+    });
+    assert.deepEqual(received.map(message => message.type), ['sync', 'heartbeat_ack', 'events_ack']);
+    assert.deepEqual(received.at(-1)!.eventIds, [eventId]);
+    assert.equal(received.at(-1)!.requestId, batchId);
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM access_events WHERE event_id=$1', [eventId])).rows[0].count, 1, 'ACK follows database commit');
+
+    const waitForControllerMessage = (socket: WebSocket, type: string, requestId?: string) => new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => { socket.removeEventListener('message', listener); reject(new Error(`Timed out waiting for ${type}`)); }, 5000);
+      const listener = (event: MessageEvent) => {
+        const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+        if (message.type !== type || (requestId && message.requestId !== requestId)) return;
+        clearTimeout(timer);
+        socket.removeEventListener('message', listener);
+        resolve(message);
+      };
+      socket.addEventListener('message', listener);
+    });
+    const reconnected = new WebSocket(`${base.replace(/^http/, 'ws')}/ws/device/${deviceId}`);
+    sockets.push(reconnected);
+    const reconnectSync = waitForControllerMessage(reconnected, 'sync');
+    reconnected.onopen = () => reconnected.send(JSON.stringify({ type: 'auth', token }));
+    assert.equal(((await reconnectSync).users as unknown[]).length, 1, 'Reconnect restores a full grant/time sync');
+    burst.close();
+
+    const retriedAck = waitForControllerMessage(reconnected, 'events_ack', batchId);
+    reconnected.send(JSON.stringify(batch));
+    assert.deepEqual((await retriedAck).eventIds, [eventId]);
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM access_events WHERE event_id=$1', [eventId])).rows[0].count, 1, 'Retry after a lost ACK is idempotent');
+
+    const rejected = new WebSocket(`${base.replace(/^http/, 'ws')}/ws/device/${deviceId}`);
+    sockets.push(rejected);
+    const authError = waitForControllerMessage(rejected, 'auth_error');
+    const unauthorizedEventId = randomUUID();
+    rejected.onopen = () => {
+      rejected.send(JSON.stringify({ type: 'auth', token: 'invalid-controller-token' }));
+      rejected.send(JSON.stringify({ ...batch, events: [{ ...batch.events[0], eventId: unauthorizedEventId }] }));
+    };
+    await authError;
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM access_events WHERE event_id=$1', [unauthorizedEventId])).rows[0].count, 0, 'Unauthenticated events cannot reach storage');
+
     assert.equal((await request(`/api/access-grants/${grantId}`, 'DELETE')).status, 204);
     await new Promise(resolve => setTimeout(resolve, 100));
     assert.equal(messages.at(-1)!.users.length, 0, 'Revocation reaches a connected controller');

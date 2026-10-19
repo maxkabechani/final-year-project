@@ -67,9 +67,11 @@ const scheduleSchema = z.object({
 type AdminSocket = {
   readyState: number;
   send(payload: string): void;
-  close(): void;
+  close(code?: number, reason?: string): void;
+  ping(): void;
+  terminate(): void;
   on(event: 'message', listener: (payload: Buffer | string) => void): void;
-  on(event: 'close' | 'error', listener: () => void): void;
+  on(event: 'close' | 'error' | 'pong', listener: () => void): void;
 };
 
 const adminSockets = new Set<AdminSocket>();
@@ -80,6 +82,37 @@ const pendingPairing = new Map<string, {
   socket: AdminSocket;
   finish: (result: PairingResult) => void;
 }>();
+
+const eventSchema = z.object({
+  eventId: z.string().uuid(),
+  occurredAt: z.string().datetime({ offset: true }),
+  type: z.enum(['granted', 'denied', 'enrolled']),
+  userId: z.string().uuid().nullable().optional(),
+  detail: z.string().max(240).default(''),
+});
+
+async function storeControllerEvents(deviceId: string, events: z.infer<typeof eventSchema>[]): Promise<void> {
+  const client = await pool.connect();
+  let inserted = 0;
+  try {
+    await client.query('BEGIN');
+    for (const event of events) {
+      const result = await client.query(
+        `INSERT INTO access_events(event_id, device_id, occurred_at, event_type, user_id, detail)
+         VALUES($1, $2, $3, $4, $5, $6) ON CONFLICT(event_id) DO NOTHING`,
+        [event.eventId, deviceId, event.occurredAt, event.type, event.userId ?? null, event.detail],
+      );
+      inserted += result.rowCount ?? 0;
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  if (inserted > 0) broadcast('events_changed', { deviceId, count: inserted });
+}
 
 function broadcast(type: string, payload: Record<string, unknown> = {}): void {
   const message = JSON.stringify({ type, ...payload });
@@ -323,7 +356,7 @@ app.route({
   },
 });
 
-await app.register(websocket);
+await app.register(websocket, { options: { maxPayload: 16 * 1024, perMessageDeflate: false } });
 
 app.get('/ws/admin', { websocket: true }, (rawSocket, request) => {
   const socket = rawSocket as unknown as AdminSocket;
@@ -355,9 +388,33 @@ app.get<{ Params: { deviceId: string } }>(
     const socket = rawSocket as unknown as AdminSocket;
     const deviceId = request.params.deviceId;
     let authenticated = false;
+    let active = true;
+    let awaitingPong = false;
+    let pendingMessages = 0;
+    let processing = Promise.resolve();
     app.log.info({ deviceId }, 'Controller WebSocket transport connected');
 
+    const authTimeout = setTimeout(() => {
+      app.log.warn({ deviceId }, 'Controller WebSocket authentication timed out');
+      socket.terminate();
+    }, 15000);
+    authTimeout.unref();
+    const keepalive = setInterval(() => {
+      if (socket.readyState !== 1 || awaitingPong) {
+        socket.terminate();
+        return;
+      }
+      awaitingPong = true;
+      socket.ping();
+    }, 30000);
+    keepalive.unref();
+    socket.on('pong', () => { awaitingPong = false; });
+
     const cleanup = () => {
+      if (!active) return;
+      active = false;
+      clearTimeout(authTimeout);
+      clearInterval(keepalive);
       for (const pending of pendingPairing.values()) {
         if (pending.socket === socket) {
           pending.finish({ accepted: false, error: 'Controller disconnected. Try again when it is online.' });
@@ -369,10 +426,17 @@ app.get<{ Params: { deviceId: string } }>(
       app.log.info({ deviceId, authenticated }, 'Controller WebSocket disconnected');
     };
     socket.on('close', cleanup);
-    socket.on('error', cleanup);
+    socket.on('error', () => { cleanup(); socket.terminate(); });
 
     socket.on('message', (rawPayload) => {
-      void (async () => {
+      if (++pendingMessages > 32) {
+        socket.close(1008, 'Too many pending messages');
+        return;
+      }
+      // An auth DB lookup can still be pending when the next frame arrives.
+      // Process frames in order so heartbeat/event messages cannot race auth.
+      processing = processing.then(async () => {
+        if (!active || socket.readyState !== 1) return;
         const payload = typeof rawPayload === 'string'
           ? rawPayload
           : rawPayload.toString('utf8');
@@ -392,26 +456,41 @@ app.get<{ Params: { deviceId: string } }>(
           }).safeParse(message);
           if (!authMessage.success ||
               !(await deviceTokenValid(deviceId, authMessage.data.token))) {
+            if (!active || socket.readyState !== 1) return;
             socket.send(JSON.stringify({ type: 'auth_error' }));
-            socket.close();
+            socket.close(1008, 'Invalid controller token');
             return;
           }
 
           deviceIdSchema.parse(deviceId);
+          if (!active || socket.readyState !== 1) return;
           authenticated = true;
+          clearTimeout(authTimeout);
           const sockets = deviceSockets.get(deviceId) ?? new Set<AdminSocket>();
           sockets.add(socket);
           deviceSockets.set(deviceId, sockets);
           await markDeviceSeen(deviceId);
           app.log.info({ deviceId }, 'Controller WebSocket authenticated');
-          socket.send(JSON.stringify(await controllerSyncPayload(deviceId)));
+          const sync = await controllerSyncPayload(deviceId);
+          if (active && socket.readyState === 1) socket.send(JSON.stringify(sync));
           return;
         }
 
         const messageType = z.object({ type: z.string() }).safeParse(message);
         if (!messageType.success) return;
 
-        if (messageType.data.type === 'pairing_ack') {
+        if (messageType.data.type === 'events') {
+          const batch = z.object({
+            requestId: z.string().uuid(),
+            events: z.array(eventSchema).min(1).max(100),
+          }).parse(message);
+          await storeControllerEvents(deviceId, batch.events);
+          // Acknowledge only after COMMIT. Repeated event IDs are harmless.
+          if (active && socket.readyState === 1) socket.send(JSON.stringify({
+            type: 'events_ack', requestId: batch.requestId,
+            eventIds: batch.events.map(event => event.eventId),
+          }));
+        } else if (messageType.data.type === 'pairing_ack') {
           const ack = z.object({
             requestId: z.string().uuid(),
             accepted: z.boolean(),
@@ -425,32 +504,34 @@ app.get<{ Params: { deviceId: string } }>(
           }
         } else if (messageType.data.type === 'heartbeat') {
           await markDeviceSeen(deviceId);
-          socket.send(JSON.stringify({
+          if (active && socket.readyState === 1) socket.send(JSON.stringify({
             type: 'heartbeat_ack',
             serverUnixSeconds: Math.floor(Date.now() / 1000),
           }));
         } else if (messageType.data.type === 'sync_request') {
           await markDeviceSeen(deviceId);
-          socket.send(JSON.stringify(await controllerSyncPayload(deviceId)));
+          const sync = await controllerSyncPayload(deviceId);
+          if (active && socket.readyState === 1) socket.send(JSON.stringify(sync));
         }
-      })().catch((error) => {
+      }).catch((error) => {
         app.log.error(error, `Device WebSocket failed for ${deviceId}`);
-        socket.close();
-      });
+        socket.terminate();
+      }).finally(() => { pendingMessages -= 1; });
     });
   },
 );
 
 app.get('/', async () => ({
   service: 'Smart Lock Access API',
-  version: '0.4.0',
+  version: '0.4.1',
   health: '/health',
   controllerWebSocket: '/ws/device/:deviceId',
 }));
 app.get('/health', async () => ({
   ok: true,
-  version: '0.4.0',
+  version: '0.4.1',
   controllerWebSocket: true,
+  controllerEventsOverWebSocket: true,
 }));
 
 app.post('/api/mobile/register', async (request, reply) => {
@@ -1252,48 +1333,13 @@ app.get<{ Params: { deviceId: string } }>(
   },
 );
 
-const eventSchema = z.object({
-  eventId: z.string().uuid(),
-  occurredAt: z.string().datetime({ offset: true }),
-  type: z.enum(['granted', 'denied', 'enrolled']),
-  userId: z.string().uuid().nullable().optional(),
-  detail: z.string().max(240).default(''),
-});
-
 app.post<{ Params: { deviceId: string } }>(
   '/api/devices/:deviceId/events',
   async (request, reply) => {
     if (!(await requireDevice(request, reply))) return;
     const deviceId = deviceIdSchema.parse(request.params.deviceId);
     const body = z.object({ events: z.array(eventSchema).max(100) }).parse(request.body);
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      for (const event of body.events) {
-        await client.query(
-          `INSERT INTO access_events(
-             event_id, device_id, occurred_at, event_type, user_id, detail
-           ) VALUES($1, $2, $3, $4, $5, $6)
-           ON CONFLICT(event_id) DO NOTHING`,
-          [
-            event.eventId,
-            deviceId,
-            event.occurredAt,
-            event.type,
-            event.userId ?? null,
-            event.detail,
-          ],
-        );
-      }
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-
-    broadcast('events_changed', { deviceId, count: body.events.length });
+    await storeControllerEvents(deviceId, body.events);
     return reply.code(202).send({ accepted: body.events.length });
   },
 );
