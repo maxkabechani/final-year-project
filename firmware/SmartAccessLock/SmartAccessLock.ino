@@ -881,7 +881,7 @@ static void handleBackendWebSocketEvent(WStype_t type, uint8_t *payload, size_t 
       }
       Serial.println();
       backendSocketAuthenticated = false;
-      backendReconnectDelayMs = std::min(backendReconnectDelayMs * 2U, 60000U);
+      backendReconnectDelayMs = std::min<uint32_t>(backendReconnectDelayMs * 2U, 60000U);
       backendSocket.setReconnectInterval(backendReconnectDelayMs);
       Serial.printf("Backend retry in %lu ms; freeHeap=%u largestBlock=%u\n",
                     static_cast<unsigned long>(backendReconnectDelayMs),
