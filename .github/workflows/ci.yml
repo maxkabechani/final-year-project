@@ -97,6 +97,49 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  ios:
+    name: iOS app and unsigned IPA
+    concurrency:
+      group: smart-access-ios-${{ github.ref }}
+      cancel-in-progress: true
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.mobile == 'true' }}
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Generate iOS project files
+        working-directory: mobile
+        run: flutter create --platforms=ios --org dev.maxkabechani --project-name smart_access .
+      - name: Add iOS permission descriptions
+        working-directory: mobile
+        run: python3 tool/prepare_ios.py
+      - name: Resolve Flutter packages
+        working-directory: mobile
+        run: flutter pub get
+      - name: Build unsigned iOS app
+        working-directory: mobile
+        run: flutter build ios --release --no-codesign --no-pub --dart-define=API_BASE_URL=https://api-project.maxkabechani.dev
+      - name: Package unsigned IPA
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          test -d build/ios/iphoneos/Runner.app
+          mkdir -p build/ios/ipa/Payload
+          ditto build/ios/iphoneos/Runner.app build/ios/ipa/Payload/Runner.app
+          (cd build/ios/ipa && ditto -c -k --sequesterRsrc --keepParent Payload Smart-Access.ipa)
+          test -s build/ios/ipa/Smart-Access.ipa
+      - name: Upload Smart Access iOS IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Smart-Access-iOS-IPA
+          path: mobile/build/ios/ipa/Smart-Access.ipa
+          if-no-files-found: error
+          retention-days: 30
+
   publish-android:
     name: Publish Android download
     needs: [changes, android]
@@ -269,3 +312,41 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install
       - run: bun run build
+  publish-ios:
+    name: Publish iOS download
+    needs: [changes, ios]
+    if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.ios.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    concurrency:
+      group: smart-access-ios-release
+      cancel-in-progress: false
+    steps:
+      - name: Download iOS IPA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Smart-Access-iOS-IPA
+          path: ios-release
+      - name: Publish iOS test build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cat > ios-release-notes.md <<EOF
+          Smart Access iOS testing IPA built from commit $GITHUB_SHA.
+
+          This IPA is unsigned. Import it into AltStore Classic to sign and install it on an iPhone.
+          EOF
+          if gh release view ios-latest >/dev/null 2>&1; then
+            gh release upload ios-latest ios-release/Smart-Access.ipa --clobber
+            gh release edit ios-latest --title "Smart Access iOS Test Build" --notes-file ios-release-notes.md --prerelease
+          else
+            gh release create ios-latest ios-release/Smart-Access.ipa \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "Smart Access iOS Test Build" \
+              --notes-file ios-release-notes.md
+          fi

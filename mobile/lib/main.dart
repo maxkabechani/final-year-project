@@ -191,10 +191,16 @@ class _AccessHomePageState extends State<AccessHomePage> {
 
   Future<String> _deviceLabel() async {
     try {
-      final info = await DeviceInfoPlugin().androidInfo;
+      final deviceInfo = DeviceInfoPlugin();
+      if (Platform.isIOS) {
+        final info = await deviceInfo.iosInfo;
+        return '${info.systemName} ${info.model}'.trim();
+      }
+
+      final info = await deviceInfo.androidInfo;
       return '${info.manufacturer} ${info.model}'.trim();
     } catch (_) {
-      return 'Android phone';
+      return Platform.isIOS ? 'iOS device' : 'Android phone';
     }
   }
 
@@ -284,8 +290,10 @@ class _AccessHomePageState extends State<AccessHomePage> {
   }
 
   Future<void> _requestBlePermissions() async {
+    // CoreBluetooth presents iOS's Bluetooth access prompt when initialized.
+    if (Platform.isIOS) return;
     if (!Platform.isAndroid) {
-      throw UnsupportedError('Smart Access currently targets Android.');
+      throw UnsupportedError('Smart Access supports Android and iOS.');
     }
 
     final androidInfo = await DeviceInfoPlugin().androidInfo;
@@ -307,8 +315,30 @@ class _AccessHomePageState extends State<AccessHomePage> {
   }
 
   Future<void> _ensureBluetoothOn() async {
-    var state = await FlutterBluePlus.adapterState.first;
+    late BluetoothAdapterState state;
+    try {
+      // CoreBluetooth commonly emits unknown before its first usable state.
+      state = await FlutterBluePlus.adapterState
+          .where(
+            (value) =>
+                value == BluetoothAdapterState.on ||
+                value == BluetoothAdapterState.off ||
+                value == BluetoothAdapterState.unauthorized,
+          )
+          .first
+          .timeout(const Duration(seconds: 10));
+    } on TimeoutException {
+      throw const FormatException(
+        'Bluetooth is still starting. Try scanning again.',
+      );
+    }
+
     if (state == BluetoothAdapterState.on) return;
+    if (state == BluetoothAdapterState.unauthorized) {
+      throw const FormatException(
+        'Allow Bluetooth access for Smart Access in Settings.',
+      );
+    }
 
     if (!Platform.isAndroid) {
       throw const FormatException('Turn on Bluetooth, then try again.');
