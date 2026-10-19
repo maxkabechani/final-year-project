@@ -29,7 +29,7 @@ flutter run --dart-define=API_BASE_URL=https://api-project.maxkabechani.dev
 
 ### iOS
 
-An iOS build requires macOS and Xcode. The CI workflow creates the iOS project files and applies the Bluetooth and Face ID permission descriptions automatically.
+iOS 15 or later is required by the current Flutter plugin set. Local iOS builds require macOS and Xcode. The CI workflow creates the iOS project files and applies the Bluetooth and Face ID permission descriptions automatically. The current device-info plugin requires Xcode 26.1.1 or later.
 
 ```bash
 flutter create --platforms=ios --org dev.maxkabechani --project-name smart_access .

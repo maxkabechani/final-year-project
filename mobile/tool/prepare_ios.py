@@ -33,9 +33,9 @@ if not project_file.is_file():
 project_source = project_file.read_text(encoding="utf-8")
 project_source, replacements = re.subn(
     r"IPHONEOS_DEPLOYMENT_TARGET\s*=\s*[0-9.]+;",
-    "IPHONEOS_DEPLOYMENT_TARGET = 13.0;",
+    "IPHONEOS_DEPLOYMENT_TARGET = 15.0;",
     project_source,
 )
 if replacements == 0:
-    raise SystemExit("Could not set the iOS deployment target to 13.0")
+    raise SystemExit("Could not set the iOS deployment target to 15.0")
 project_file.write_text(project_source, encoding="utf-8")

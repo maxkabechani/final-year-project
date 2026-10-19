@@ -104,9 +104,11 @@ jobs:
       cancel-in-progress: true
     needs: changes
     if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.mobile == 'true' }}
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+      - name: Show selected Xcode version
+        run: xcodebuild -version
       - uses: subosito/flutter-action@v2
         with:
           channel: stable

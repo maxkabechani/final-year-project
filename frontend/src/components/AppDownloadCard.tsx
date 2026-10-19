@@ -31,7 +31,7 @@ export function AppDownloadCard() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            iOS testing builds are unsigned. Import the IPA into AltStore Classic to install it; free Apple ID installs need refreshing every 7 days through AltServer.
+            iOS 15+ testing builds are unsigned. Import the IPA into AltStore Classic to install it; free Apple ID installs need refreshing every 7 days through AltServer.
           </p>
         </div>
         <div className="shrink-0 space-y-2 text-center">
