@@ -30,7 +30,8 @@ jobs:
     name: Detect changed components
     runs-on: ubuntu-latest
     outputs:
-      mobile: ${{ steps.filter.outputs.mobile }}
+      android: ${{ steps.filter.outputs.android }}
+      ios: ${{ steps.filter.outputs.ios }}
       firmware: ${{ steps.filter.outputs.firmware }}
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
@@ -40,8 +41,21 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
-            mobile:
-              - 'mobile/**'
+            android:
+              - 'mobile/lib/**'
+              - 'mobile/test/**'
+              - 'mobile/pubspec.*'
+              - 'mobile/android/**'
+              - 'mobile/.metadata'
+              - 'mobile/tool/prepare_android.py'
+              - 'mobile/tool/build_android.py'
+            ios:
+              - 'mobile/lib/**'
+              - 'mobile/test/**'
+              - 'mobile/pubspec.*'
+              - 'mobile/ios/**'
+              - 'mobile/.metadata'
+              - 'mobile/tool/prepare_ios.py'
             firmware:
               - 'firmware/**'
             backend:
@@ -57,7 +71,7 @@ jobs:
       group: smart-access-android-${{ github.ref }}
       cancel-in-progress: true
     needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.mobile == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.android == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,14 +100,20 @@ jobs:
           flutter test --no-pub
       - name: Build Smart Access APK
         working-directory: mobile
-        run: |
-          flutter build apk --debug --no-pub --dart-define=API_BASE_URL=https://api-project.maxkabechani.dev
-          cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/Smart-Access.apk
+        run: python3 tool/build_android.py
       - name: Upload Smart Access APK
         uses: actions/upload-artifact@v4
         with:
           name: Smart-Access-APK
-          path: mobile/build/app/outputs/flutter-apk/Smart-Access.apk
+          path: mobile/build/app/outputs/flutter-apk/Smart-Access*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Android debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: Smart-Access-Android-Symbols
+          path: mobile/build/android-symbols/
           if-no-files-found: error
           retention-days: 30
 
@@ -103,7 +123,7 @@ jobs:
       group: smart-access-ios-${{ github.ref }}
       cancel-in-progress: true
     needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.mobile == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.ios == 'true' }}
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -145,7 +165,7 @@ jobs:
   publish-android:
     name: Publish Android download
     needs: [changes, android]
-    if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (needs.android.result == 'success' || (needs.android.result == 'skipped' && needs.changes.outputs.mobile == 'false')) }}
+    if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (needs.android.result == 'success' || (needs.android.result == 'skipped' && needs.changes.outputs.android == 'false')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -169,10 +189,12 @@ jobs:
             --jq '.artifacts[] | select(.expired == false and .workflow_run.head_branch == "main") | [.id, .workflow_run.head_sha] | @tsv' > candidates.tsv
           while IFS=$'\t' read -r artifact_id source_sha; do
             if git cat-file -e "${source_sha}^{commit}" 2>/dev/null && \
-              git diff --quiet "$source_sha" "$GITHUB_SHA" -- mobile; then
+              git diff --quiet "$source_sha" "$GITHUB_SHA" -- mobile/lib mobile/test mobile/pubspec.yaml mobile/pubspec.lock mobile/android mobile/.metadata mobile/tool/prepare_android.py mobile/tool/build_android.py; then
               gh api "repos/${GH_REPO}/actions/artifacts/${artifact_id}/zip" > apk.zip
               unzip -q apk.zip -d apk
               test -s apk/Smart-Access.apk
+              test -s apk/Smart-Access-armeabi-v7a.apk
+              test -s apk/Smart-Access-x86_64.apk
               echo "source_sha=${source_sha}" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -202,13 +224,18 @@ jobs:
           cat > release-notes.md <<EOF
           Smart Access Android demo APK built from commit ${APK_SOURCE_SHA}.
 
-          Download Smart-Access.apk on your Android phone. This is the debug build used for the project demonstration.
+          Release-mode APKs with separate CPU architectures:
+          - Smart-Access.apk: ARM64 phones (recommended).
+          - Smart-Access-armeabi-v7a.apk: older 32-bit Android phones.
+          - Smart-Access-x86_64.apk: x86-64 Android emulators.
+
+          These are direct-install project testing builds using the generated Android template signing configuration.
           EOF
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" apk/Smart-Access.apk --clobber 2>release-error.log
+            gh release upload "$tag" apk/Smart-Access*.apk --clobber 2>release-error.log
             gh release edit "$tag" --latest --notes-file release-notes.md 2>release-error.log
           else
-            gh release create "$tag" apk/Smart-Access.apk \
+            gh release create "$tag" apk/Smart-Access*.apk \
               --target "$GITHUB_SHA" --latest \
               --title "Smart Access Android" --notes-file release-notes.md 2>release-error.log
           fi

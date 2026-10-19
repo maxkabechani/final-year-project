@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 
 export const androidDownloadUrl = 'https://github.com/maxkabechani/final-year-project/releases/latest/download/Smart-Access.apk'
+export const android32BitDownloadUrl = 'https://github.com/maxkabechani/final-year-project/releases/latest/download/Smart-Access-armeabi-v7a.apk'
 export const iosDownloadUrl = 'https://github.com/maxkabechani/final-year-project/releases/download/ios-latest/Smart-Access.ipa'
 
 export function AppDownloadCard() {
@@ -21,7 +22,7 @@ export function AppDownloadCard() {
           <div className="flex flex-wrap gap-2">
             <Button asChild>
               <a href={androidDownloadUrl}>
-                <Download aria-hidden="true" /> Android APK
+                <Download aria-hidden="true" /> Android APK (ARM64)
               </a>
             </Button>
             <Button variant="outline" asChild>
@@ -30,6 +31,9 @@ export function AppDownloadCard() {
               </a>
             </Button>
           </div>
+          <p className="text-xs text-muted-foreground">
+            For older Android phones, <a className="underline underline-offset-4" href={android32BitDownloadUrl}>download the 32-bit APK</a>.
+          </p>
           <p className="text-xs text-muted-foreground">
             iOS 15+ testing builds are unsigned. Import the IPA into AltStore Classic to install it; free Apple ID installs need refreshing every 7 days through AltServer.
           </p>
@@ -44,7 +48,7 @@ export function AppDownloadCard() {
               title="Scan to download the Smart Access Android app"
             />
           </div>
-          <p className="text-xs text-muted-foreground">Scan to download Android APK</p>
+          <p className="text-xs text-muted-foreground">Scan for Android APK (ARM64)</p>
         </div>
       </CardContent>
     </Card>

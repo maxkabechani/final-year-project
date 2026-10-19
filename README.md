@@ -25,13 +25,13 @@ Production API: `https://api-project.maxkabechani.dev`
 
 ## APK
 
-GitHub Actions builds an installable Android debug APK on every push.
+GitHub Actions builds optimized, installable Android release APKs when Android or shared mobile source changes.
 
 Open **Actions → Smart Access CI** and download the artifact:
 
 `Smart-Access-APK`
 
-The file inside the artifact is:
+The default ARM64 APK inside the artifact is:
 
 `Smart-Access.apk`
 
@@ -41,7 +41,7 @@ https://github.com/maxkabechani/final-year-project/releases/latest/download/Smar
 
 The dashboard's **Download app** button and QR code both use this public download URL;
 phones do not need a dashboard or GitHub login to download it. The APK is the project's
-debug/demo build. Android may require allowing installation from the browser.
+release-mode demo build for ARM64 phones. The release also includes a 32-bit armeabi-v7a APK for older phones and an x86_64 APK for emulators. Android may require allowing installation from the browser.
 Pull requests do not publish releases. Web-only changes reuse an unexpired APK only
 after verifying that its mobile source matches the current mobile source.
 To publish manually, run **Smart Access CI**
