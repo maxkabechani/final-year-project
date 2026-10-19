@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { accessDate, accessDateTime, accessDayMask } from '../src/lib/access-time.ts'
+import { accessDate, accessDateTime, accessDayMask, accessGrantState, accessTimestamp } from '../src/lib/access-time.ts'
 
 test('one-off timestamps and edit dates use Zambia time in every browser timezone', () => {
   const originalTz = process.env.TZ
@@ -32,4 +32,25 @@ test('rejects invalid dates and times rather than silently shifting access', () 
   for (const [date, time] of [['2026-02-30', '08:00'], ['2026-10-19', '24:01'], ['2026-10-19', '12:60'], ['', '08:00']]) {
     assert.equal(Number.isNaN(accessDateTime(date, time).getTime()), true)
   }
+})
+
+test('a future activation is shown as scheduled, never active', () => {
+  const now = Date.parse('2026-10-19T10:00:00Z') / 1000
+  const start = Date.parse('2026-10-19T12:00:00Z') / 1000
+  const grant = { validFrom: start, validUntil: null }
+  assert.equal(accessGrantState(grant, now), 'scheduled')
+  assert.equal(accessGrantState(grant, start), 'active')
+  assert.equal(accessGrantState({ ...grant, validUntil: start + 60 }, start + 60), 'expired')
+  assert.equal(accessTimestamp(start), '2026-10-19 14:00')
+})
+
+test('saving an explicit recurring start date replaces a hidden future timestamp', () => {
+  const now = Date.parse('2026-10-19T10:00:00Z') / 1000
+  const oldGrant = { validFrom: now + 6 * 3600, validUntil: null }
+  assert.equal(accessGrantState(oldGrant, now), 'scheduled')
+  const selectedDate = accessDate(new Date(oldGrant.validFrom * 1000))
+  const corrected = { ...oldGrant, validFrom: accessDateTime(selectedDate, '00:00').getTime() / 1000 }
+  assert.equal(accessGrantState(corrected, now), 'active')
+  const intentionalFuture = { ...oldGrant, validFrom: accessDateTime('2026-10-20', '00:00').getTime() / 1000 }
+  assert.equal(accessGrantState(intentionalFuture, now), 'scheduled')
 })

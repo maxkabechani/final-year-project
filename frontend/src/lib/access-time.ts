@@ -5,6 +5,19 @@ export const accessUtcOffsetMinutes = 120
 export const accessDate = (instant: Date): string =>
   new Date(instant.getTime() + accessUtcOffsetMinutes * 60_000).toISOString().slice(0, 10)
 
+export const accessTimestamp = (unixSeconds: number): string =>
+  new Date(unixSeconds * 1000 + accessUtcOffsetMinutes * 60_000)
+    .toISOString().slice(0, 16).replace('T', ' ')
+
+export const accessGrantState = (
+  grant: { validFrom: number; validUntil: number | null },
+  nowUnixSeconds = Math.floor(Date.now() / 1000),
+): 'active' | 'scheduled' | 'expired' => {
+  if (grant.validUntil !== null && grant.validUntil <= nowUnixSeconds) return 'expired'
+  if (grant.validFrom > nowUnixSeconds) return 'scheduled'
+  return 'active'
+}
+
 export const accessDayMask = (instant: Date): number => {
   const day = new Date(instant.getTime() + accessUtcOffsetMinutes * 60_000).getUTCDay()
   return 1 << (day === 0 ? 6 : day - 1)

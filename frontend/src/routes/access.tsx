@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { dayMaskFromDate, daysLabel, grantState, minutesToTime, timeToMinutes, type AccessGrant, type AccessSchedule, type AccessType } from '@/lib/api'
-import { accessDate, accessDateTime } from '@/lib/access-time'
+import { accessDate, accessDateTime, accessTimestamp } from '@/lib/access-time'
 import { useAdminConfig } from '@/lib/config'
 import { useAccessGrants, useDevices, useGrantAccess, useManageResource, usePeople, useRevokeGrant } from '@/lib/queries'
 
@@ -109,6 +109,7 @@ function AccessPage() {
         <div>
           <div>{row.original.accessType === 'one_off' ? accessDate(new Date(row.original.validFrom * 1000)) : daysLabel(row.original.daysMask)}</div>
           <div className="text-xs tabular-nums text-muted-foreground">{minutesToTime(row.original.startMinute)}–{minutesToTime(row.original.endMinute)}</div>
+          {row.original.validFrom > 0 && <div className="text-xs tabular-nums text-muted-foreground">Starts {accessTimestamp(row.original.validFrom)} Zambia time</div>}
         </div>
       ),
     },
@@ -118,7 +119,7 @@ function AccessPage() {
       accessorFn: (grant) => grantState(grant),
       cell: ({ row }) => grantState(row.original) === 'active'
         ? <Badge className="bg-emerald-500 text-white hover:bg-emerald-500">Active</Badge>
-        : <Badge variant="outline" className="text-muted-foreground">Expired</Badge>,
+        : <Badge variant="outline" className="text-muted-foreground">{grantState(row.original) === 'scheduled' ? 'Starts later' : 'Expired'}</Badge>,
     },
     {
       id: 'actions',
@@ -131,7 +132,7 @@ function AccessPage() {
             updateGrant.reset(); setEditingGrantId(grant.grantId); setPersonId(grant.personId); setDeviceId(grant.deviceId)
             setAccessType(grant.accessType); setStartTime(minutesToTime(grant.startMinute)); setEndTime(minutesToTime(grant.endMinute))
             setSelectedDays(dayOptions.filter(day => (grant.daysMask & (1 << Number(day.value))) !== 0).map(day => day.value))
-            setOneOffDate(accessDate(new Date(grant.validFrom * 1000)))
+            setOneOffDate(accessDate(grant.validFrom > 0 ? new Date(grant.validFrom * 1000) : new Date()))
             document.getElementById('access-assignment')?.scrollIntoView({ behavior: 'smooth' })
           }}><Pencil /> Edit</Button>
           <ConfirmAction name={`access for ${row.original.personName}`} label="Revoke" disabled={revoke.isPending}
@@ -154,13 +155,15 @@ function AccessPage() {
     let schedule: AccessSchedule
     if (accessType === 'recurring') {
       if (selectedDays.length === 0) return toast.error('Select at least one day')
+      const startDate = accessDateTime(oneOffDate, '00:00')
+      if (Number.isNaN(startDate.getTime())) return toast.error('Choose a valid start date')
       const daysMask = selectedDays.reduce((mask, value) => mask | (1 << Number(value)), 0)
       schedule = {
         accessType: 'recurring',
         daysMask,
         startMinute,
         endMinute,
-        validFrom: editingGrantId ? (grants.data?.find(grant => grant.grantId === editingGrantId)?.validFrom ?? Math.floor(Date.now() / 1000)) : Math.floor(Date.now() / 1000),
+        validFrom: Math.floor(startDate.getTime() / 1000),
         validUntil: editingGrantId ? (grants.data?.find(grant => grant.grantId === editingGrantId && grant.accessType === 'recurring')?.validUntil ?? null) : null,
       }
     } else {
@@ -276,12 +279,13 @@ function AccessPage() {
                     {dayOptions.map((day) => <ToggleGroupItem key={day.value} value={day.value} aria-label={day.label}>{day.label}</ToggleGroupItem>)}
                   </ToggleGroup>
                 </div>
-              ) : (
-                <div className="grid gap-2">
-                  <label htmlFor="one-off-date" className="text-sm font-medium">Date</label>
-                  <Input id="one-off-date" type="date" value={oneOffDate} onChange={(e) => setOneOffDate(e.target.value)} required />
-                </div>
-              )}
+              ) : null}
+
+              <div className="grid gap-2">
+                <label htmlFor="access-date" className="text-sm font-medium">{accessType === 'recurring' ? 'Start date' : 'Date'}</label>
+                <Input id="access-date" type="date" value={oneOffDate} onChange={(e) => setOneOffDate(e.target.value)} required />
+                {accessType === 'recurring' && <p className="text-xs text-muted-foreground">Access begins on this date in Zambia, during the selected days and hours. Saving replaces the previous start timestamp.</p>}
+              </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="grid gap-2">

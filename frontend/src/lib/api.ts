@@ -1,4 +1,4 @@
-import { accessDayMask } from './access-time'
+import { accessDayMask, accessGrantState } from './access-time'
 
 export type Device = {
   deviceId: string
@@ -122,10 +122,5 @@ export const daysLabel = (mask: number): string => {
 
 export const dayMaskFromDate = accessDayMask
 
-export const grantState = (grant: AccessGrant): 'active' | 'expired' => {
-  if (grant.validUntil !== null && grant.validUntil <= Math.floor(Date.now() / 1000)) {
-    return 'expired'
-  }
-  return 'active'
-}
+export const grantState = accessGrantState
 
