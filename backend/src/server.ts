@@ -532,7 +532,7 @@ app.get('/', async () => ({
 }));
 app.get('/health', async () => ({
   ok: true,
-  version: '0.4.1',
+  version: '0.4.2',
   controllerWebSocket: true,
   controllerEventsOverWebSocket: true,
   controllerDisplayNames: true,

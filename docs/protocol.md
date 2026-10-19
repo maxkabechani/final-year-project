@@ -84,7 +84,7 @@ The result notification is byte 0x04, a 12-byte random AES-GCM nonce, ciphertext
 
 ### Enrollment request
 
-Enrollment uses the same ECDH/AES-GCM session, and is accepted only during the physical pairing window. The LCD shows a six-digit PIN for 120 seconds after the exit button is held for five seconds.
+Enrollment uses the same ECDH/AES-GCM session and is accepted only during the controller's pairing window. The window opens for 120 seconds at boot or through the authenticated dashboard pairing command; the LCD shows the configured six-digit PIN. Holding the exit button does not enable pairing.
 
 The decrypted enrollment payload is 69 bytes:
 
