@@ -89,6 +89,7 @@ test('management CRUD, authorization, controller revocation, and owner safeguard
       ws.onerror = reject;
     });
     assert.equal(messages.at(-1)!.users.length, 1);
+    assert.equal((messages.at(-1)!.users[0] as { name: string }).name, 'Updated Student', 'Controller receives the registered person name');
 
     // Queue several frames before the auth DB lookup completes. They must be
     // handled in order, and event retries must never create duplicate rows.
@@ -138,6 +139,16 @@ test('management CRUD, authorization, controller revocation, and owner safeguard
     reconnected.onopen = () => reconnected.send(JSON.stringify({ type: 'auth', token }));
     assert.equal(((await reconnectSync).users as unknown[]).length, 1, 'Reconnect restores a full grant/time sync');
     burst.close();
+
+    const renamedSync = waitForControllerMessage(reconnected, 'sync');
+    assert.equal((await request(`/api/people/${personId}`, 'PATCH', {
+      name: 'José Updated Student', studentNumber: `UPDATED-${stamp}`,
+    })).status, 200);
+    const renamed = (await renamedSync).users as Array<{ name: string }>;
+    assert.equal(renamed[0]!.name, 'Jose Updated Student', 'Renaming a person pushes fresh LCD metadata');
+    const httpSync = await fetch(`${base}/api/devices/${deviceId}/sync`, { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(httpSync.status, 200);
+    assert.equal(((await httpSync.json()) as { users: Array<{ name: string }> }).users[0]!.name, 'Jose Updated Student');
 
     const retriedAck = waitForControllerMessage(reconnected, 'events_ack', batchId);
     reconnected.send(JSON.stringify(batch));
@@ -191,3 +202,4 @@ test('management CRUD, authorization, controller revocation, and owner safeguard
     await closeDatabase();
   }
 });
+

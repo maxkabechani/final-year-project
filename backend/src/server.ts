@@ -16,6 +16,7 @@ import {
 } from './crypto.js';
 import { auth } from './auth.js';
 import { closeDatabase, initializeDatabase, pool } from './database.js';
+import { controllerDisplayName } from './controller-display.js';
 
 const app = Fastify({ logger: true, bodyLimit: 256 * 1024 });
 const masterKey = process.env.CREDENTIAL_MASTER_KEY ?? '';
@@ -146,6 +147,7 @@ async function controllerSyncPayload(deviceId: string) {
   const result = await pool.query(
     `SELECT
        g.person_id AS "userId",
+       p.name AS "displayName",
        p.credential_ciphertext AS ciphertext,
        g.days_mask AS "daysMask",
        g.start_minute AS "startMinute",
@@ -166,6 +168,7 @@ async function controllerSyncPayload(deviceId: string) {
     serverUnixSeconds: Math.floor(Date.now() / 1000),
     users: result.rows.map((row) => ({
       userId: row.userId,
+      name: controllerDisplayName(row.displayName),
       credentialKeyHex: decryptCredentialHex(row.ciphertext, masterKey),
       schedule: {
         daysMask: Number(row.daysMask),
@@ -523,7 +526,7 @@ app.get<{ Params: { deviceId: string } }>(
 
 app.get('/', async () => ({
   service: 'Smart Lock Access API',
-  version: '0.4.1',
+  version: '0.4.2',
   health: '/health',
   controllerWebSocket: '/ws/device/:deviceId',
 }));
@@ -532,6 +535,7 @@ app.get('/health', async () => ({
   version: '0.4.1',
   controllerWebSocket: true,
   controllerEventsOverWebSocket: true,
+  controllerDisplayNames: true,
 }));
 
 app.post('/api/mobile/register', async (request, reply) => {
@@ -935,6 +939,13 @@ app.patch<{ Params: { personId: string } }>(
       );
       if (!result.rowCount) return reply.code(404).send({ error: 'Person not found' });
       broadcast('people_changed', { personId });
+      const grants = await pool.query<{ deviceId: string }>(
+        'SELECT DISTINCT device_id AS "deviceId" FROM access_grants WHERE person_id=$1 AND revoked_at IS NULL',
+        [personId],
+      );
+      for (const { deviceId } of grants.rows) {
+        void pushControllerSync(deviceId).catch(error => app.log.error(error, 'Updated person name sync failed'));
+      }
       return { person: result.rows[0] };
     } catch (error) {
       if ((error as { code?: string; constraint?: string }).code === '23505' &&
@@ -1406,3 +1417,4 @@ start().catch((error: unknown) => {
 
 process.on('SIGINT', () => void app.close());
 process.on('SIGTERM', () => void app.close());
+

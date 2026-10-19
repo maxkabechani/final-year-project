@@ -115,5 +115,10 @@ Encrypted result plaintext status values are 0x10 granted, 0x11 invalid or unkno
 
 ## Event synchronization
 
+Controller sync includes an optional `name` string for each user, derived from the registered person's name. It is limited to 30 printable ASCII characters for LCD display and the ESP32's 15 KiB WebSocket frame limit. Firmware caches it separately from the unchanged 61-byte credential record, and uses it only after authenticating an unlock request. Missing names fall back to `Authorized user`; names never grant access or change the BLE wire format.
+
+The physical exit button is independent of phone authentication and schedules. It produces a five-second relay pulse and a `granted` audit event with `userId: null` and detail `exit button release`. Debouncing and relay timing run independently of network/LCD processing.
+
 The controller records grants, denials, exits, and door state changes in a bounded flash queue. Wi-Fi sends queued events to the backend when available. API access is not part of the BLE unlock decision.
+
 

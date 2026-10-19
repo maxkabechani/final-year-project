@@ -1,3 +1,67 @@
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+
+// These hardware-independent helpers are also exercised by the host tests.
+namespace SmartAccessHardware {
+class ExitButton {
+ public:
+  void begin(bool pressed, uint32_t now) {
+    raw_ = stable_ = pressed;
+    changedAt_ = now;
+    armed_ = !pressed;
+  }
+  bool update(bool pressed, uint32_t now) {
+    if (pressed != raw_) { raw_ = pressed; changedAt_ = now; }
+    if (raw_ == stable_ || static_cast<uint32_t>(now - changedAt_) < 40U) return false;
+    stable_ = raw_;
+    if (!stable_) { armed_ = true; return false; }
+    if (!armed_) return false;
+    armed_ = false;
+    return true;
+  }
+ private:
+  bool raw_ = false, stable_ = false, armed_ = false;
+  uint32_t changedAt_ = 0;
+};
+
+class RelayPulse {
+ public:
+  void start(uint32_t now) { deadline_ = now + 5000U; active_ = true; }
+  bool update(uint32_t now) {
+    if (!active_ || static_cast<int32_t>(now - deadline_) < 0) return false;
+    active_ = false;
+    return true;
+  }
+  bool active() const { return active_; }
+ private:
+  uint32_t deadline_ = 0;
+  bool active_ = false;
+};
+
+static void displayText(char *out, size_t size, const char *text) {
+  if (size == 0) return;
+  size_t length = 0;
+  const unsigned char *p = reinterpret_cast<const unsigned char *>(text ? text : "");
+  while (*p && length + 1 < size) {
+    const unsigned char c = *p++;
+    if ((c & 0xc0) == 0x80) continue; // Skip UTF-8 continuation bytes.
+    out[length++] = c == '\n' || c == '\r' || c == '\t' ? ' ' : (c >= 32 && c <= 126 ? c : '?');
+  }
+  while (length && out[length - 1] == ' ') --length;
+  out[length] = '\0';
+}
+
+static void displayPage(const char *text, uint32_t page, char out[17]) {
+  const size_t length = strlen(text);
+  const size_t pages = length == 0 ? 1 : (length + 15) / 16;
+  const size_t start = (page % pages) * 16;
+  for (size_t i = 0; i < 16; ++i) out[i] = start + i < length ? text[start + i] : ' ';
+  out[16] = '\0';
+}
+} // namespace SmartAccessHardware
+
+#ifndef SMART_ACCESS_HOST_TEST
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include "BLEDevice.h"
@@ -8,6 +72,9 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <WebSocketsClient.h>
+#include <Wire.h>
+#include <hd44780.h>
+#include <hd44780ioClass/hd44780_I2Cexp.h>
 #include <esp_system.h>
 #include <algorithm>
 #include <mbedtls/ecdh.h>
@@ -41,6 +108,10 @@
 #define SMART_LOCK_PIN_LED_RED 27
 #define SMART_LOCK_PIN_LED_GREEN 26
 #define SMART_LOCK_PIN_LED_BLUE 25
+#define SMART_LOCK_PIN_EXIT_BUTTON 19  // X3: normally-open button to GND; R11 = 10k to 3V3.
+#define SMART_LOCK_LCD_ENABLED 1
+#define SMART_LOCK_PIN_LCD_SDA 21
+#define SMART_LOCK_PIN_LCD_SCL 22
 // ============================================================
 
 static const char *kServiceUuid = "9b8e0001-61d0-4f10-9c2a-71f4c05a0001";
@@ -50,7 +121,6 @@ static const uint8_t kMaxUsers = 48;
 static const uint8_t kMaxEvents = 24;
 static const uint32_t kPairWindowMs = 120000;
 static const uint32_t kSessionWindowMs = 15000;
-static const uint32_t kUnlockMs = 5000;
 static const size_t kMaxBleMessage = 128;
 static const uint8_t kRelayOnLevel = SMART_LOCK_RELAY_ACTIVE_HIGH ? HIGH : LOW;
 static const uint8_t kRelayOffLevel = SMART_LOCK_RELAY_ACTIVE_HIGH ? LOW : HIGH;
@@ -63,6 +133,13 @@ struct __attribute__((packed)) UserRecord {
   uint16_t endMinute;
   uint32_t validFrom;
   uint32_t validUntil;
+};
+static_assert(sizeof(UserRecord) == 61, "Keep existing NVS/BLE credentials compatible");
+
+// Names are display metadata, stored separately to preserve existing credentials.
+struct __attribute__((packed)) UserNameRecord {
+  uint8_t userId[16];
+  char name[31];
 };
 
 struct __attribute__((packed)) EventRecord {
@@ -82,7 +159,23 @@ enum EventType : uint8_t {
 Preferences preferences;
 BLECharacteristic *messageCharacteristic = nullptr;
 std::vector<UserRecord> users;
+std::vector<UserNameRecord> userNames;
 std::vector<EventRecord> events;
+
+hd44780_I2Cexp lcd; // Auto-detect the backpack address and pin mapping.
+bool lcdReady = false;
+char displayLine1[65] = "Smart Access";
+char displayLine2[65] = "Starting...";
+char previousLcdLines[2][17] = {};
+uint32_t displayStartedAt = 0;
+uint32_t displayDurationMs = 2500;
+
+portMUX_TYPE hardwareMux = portMUX_INITIALIZER_UNLOCKED;
+SmartAccessHardware::ExitButton exitButton;
+SmartAccessHardware::RelayPulse relayPulse;
+bool pendingExitRelease = false;
+bool pendingRelayClosed = false;
+bool hardwareTaskRunning = false;
 
 portMUX_TYPE bleMux = portMUX_INITIALIZER_UNLOCKED;
 uint8_t pendingBleBytes[kMaxBleMessage];
@@ -110,7 +203,6 @@ uint32_t pairingExpiresAt = 0;
 uint8_t pairingFailures = 0;
 bool lockoutActive = false;
 uint32_t lockoutExpiresAt = 0;
-uint32_t unlockUntil = 0;
 uint32_t lastWifiReconnectAt = 0;
 uint32_t lastWsHeartbeatAt = 0;
 uint32_t lastWsAuthAt = 0;
@@ -352,6 +444,13 @@ static void loadStoredData() {
     users.resize(userBytes / sizeof(UserRecord));
     preferences.getBytes("users", users.data(), userBytes);
   }
+  const size_t nameBytes = preferences.getBytesLength("user-names");
+  if (nameBytes > 0 && nameBytes % sizeof(UserNameRecord) == 0 &&
+      nameBytes / sizeof(UserNameRecord) <= kMaxUsers) {
+    userNames.resize(nameBytes / sizeof(UserNameRecord));
+    preferences.getBytes("user-names", userNames.data(), nameBytes);
+    for (UserNameRecord &record : userNames) record.name[30] = '\0';
+  }
   const size_t eventBytes = preferences.getBytesLength("events");
   if (eventBytes > 0 && eventBytes % sizeof(EventRecord) == 0 &&
       eventBytes / sizeof(EventRecord) <= kMaxEvents) {
@@ -373,14 +472,135 @@ static bool saveUsers(const std::vector<UserRecord> &records) {
   return true;
 }
 
+static const UserNameRecord *findUserName(const uint8_t *userId) {
+  for (const UserNameRecord &record : userNames) {
+    if (memcmp(record.userId, userId, 16) == 0) return &record;
+  }
+  return nullptr;
+}
+
+static bool saveUserNames(const std::vector<UserNameRecord> &records) {
+  const size_t bytes = records.size() * sizeof(UserNameRecord);
+  if (records.size() == userNames.size() &&
+      (bytes == 0 || memcmp(records.data(), userNames.data(), bytes) == 0)) return true;
+  if (bytes == 0) {
+    preferences.remove("user-names");
+  } else if (preferences.putBytes("user-names", records.data(), bytes) != bytes) {
+    return false;
+  }
+  userNames = records;
+  return true;
+}
+
+static bool relayIsActive() {
+  portENTER_CRITICAL(&hardwareMux);
+  const bool active = relayPulse.active();
+  portEXIT_CRITICAL(&hardwareMux);
+  return active;
+}
+
+static void startRelayPulse() {
+  portENTER_CRITICAL(&hardwareMux);
+  relayPulse.start(millis());
+  pendingRelayClosed = false;
+  digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOnLevel);
+  portEXIT_CRITICAL(&hardwareMux);
+}
+
+// No LCD, flash, crypto, or network calls here. The dedicated task keeps the
+// physical exit button and five-second relay deadline responsive during TLS.
+static void serviceHardware() {
+  const uint32_t now = millis();
+  portENTER_CRITICAL(&hardwareMux);
+  if (relayPulse.update(now)) {
+    digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOffLevel);
+    pendingRelayClosed = true;
+  }
+  portEXIT_CRITICAL(&hardwareMux);
+  if (exitButton.update(digitalRead(SMART_LOCK_PIN_EXIT_BUTTON) == LOW, now)) {
+    portENTER_CRITICAL(&hardwareMux);
+    if (!relayPulse.active()) {
+      relayPulse.start(now);
+      pendingRelayClosed = false;
+      digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOnLevel);
+      pendingExitRelease = true;
+    }
+    portEXIT_CRITICAL(&hardwareMux);
+  }
+}
+
+static void hardwareTask(void *) {
+  for (;;) {
+    serviceHardware();
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+}
+
 static void setRgb(bool red, bool green, bool blue) {
   digitalWrite(SMART_LOCK_PIN_LED_RED, red ? HIGH : LOW);
   digitalWrite(SMART_LOCK_PIN_LED_GREEN, green ? HIGH : LOW);
   digitalWrite(SMART_LOCK_PIN_LED_BLUE, blue ? HIGH : LOW);
 }
 
-static void showMessage(const char *line1, const char *line2) {
+static void showMessageFor(const char *line1, const char *line2, uint32_t durationMs) {
   Serial.printf("%s | %s\n", line1, line2);
+  SmartAccessHardware::displayText(displayLine1, sizeof(displayLine1), line1);
+  SmartAccessHardware::displayText(displayLine2, sizeof(displayLine2), line2);
+  displayStartedAt = millis();
+  displayDurationMs = durationMs;
+}
+
+static void showMessage(const char *line1, const char *line2) {
+  showMessageFor(line1, line2, 3000);
+}
+
+static void setupLcd() {
+  if (!SMART_LOCK_LCD_ENABLED) return;
+  Wire.begin(SMART_LOCK_PIN_LCD_SDA, SMART_LOCK_PIN_LCD_SCL);
+  Wire.setTimeOut(20);
+  const int status = lcd.begin(16, 2);
+  lcdReady = status == 0;
+  Serial.printf("LCD initialization: %s (status=%d, SDA=%d, SCL=%d)\n",
+                lcdReady ? "ready" : "not found; access remains available",
+                status, SMART_LOCK_PIN_LCD_SDA, SMART_LOCK_PIN_LCD_SCL);
+}
+
+static void updateLcd() {
+  if (!lcdReady) return;
+  char line1[65], line2[65];
+  const uint32_t elapsed = millis() - displayStartedAt;
+  uint32_t page = 0;
+  if (elapsed < displayDurationMs) {
+    strlcpy(line1, displayLine1, sizeof(line1));
+    strlcpy(line2, displayLine2, sizeof(line2));
+    page = elapsed / 1400U;
+  } else if (pairingActive) {
+    strlcpy(line1, "Pairing enabled", sizeof(line1));
+    snprintf(line2, sizeof(line2), "PIN: %s", pairingPin);
+  } else {
+    strlcpy(line1, "Smart Access", sizeof(line1));
+    const time_t localSeconds = static_cast<time_t>(nowUnix()) + 7200;
+    struct tm localTime;
+    if (clockValid && gmtime_r(&localSeconds, &localTime) != nullptr) {
+      snprintf(line2, sizeof(line2), "%s %02d:%02d:%02d",
+               backendSocketAuthenticated ? "Online" : "Offline",
+               localTime.tm_hour, localTime.tm_min, localTime.tm_sec);
+    } else {
+      strlcpy(line2, "Waiting for sync", sizeof(line2));
+    }
+  }
+  char frames[2][17];
+  SmartAccessHardware::displayPage(line1, page, frames[0]);
+  SmartAccessHardware::displayPage(line2, page, frames[1]);
+  for (uint8_t row = 0; row < 2; ++row) {
+    if (memcmp(frames[row], previousLcdLines[row], 17) == 0) continue;
+    if (lcd.setCursor(0, row) != 0 || lcd.print(frames[row]) != 16) {
+      lcdReady = false;
+      Serial.println("LCD I2C write failed; display disabled until restart. Access remains available.");
+      return;
+    }
+    memcpy(previousLcdLines[row], frames[row], 17);
+  }
 }
 
 static void beep(uint16_t durationMs) {
@@ -394,19 +614,37 @@ static void beep() {
 }
 
 static void unlockDoor(const uint8_t *userId) {
-  digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOnLevel);
-  unlockUntil = millis() + kUnlockMs;
+  startRelayPulse();
   setRgb(false, true, false);
   beep();
   appendEvent(EVENT_GRANTED, userId, "access granted");
-  showMessage("Access granted", "Door unlocked");
+  const UserNameRecord *record = findUserName(userId);
+  showMessageFor("Access granted", record && record->name[0] ? record->name : "Authorized user", 10000);
+}
+
+static void serviceHardwareFeedback() {
+  portENTER_CRITICAL(&hardwareMux);
+  const bool exited = pendingExitRelease;
+  const bool closed = pendingRelayClosed;
+  pendingExitRelease = pendingRelayClosed = false;
+  portEXIT_CRITICAL(&hardwareMux);
+  if (exited) {
+    setRgb(false, true, false);
+    beep();
+    appendEvent(EVENT_GRANTED, nullptr, "exit button release");
+    showMessageFor("Exit button", relayIsActive() ? "Door unlocked" : "Release complete", 7000);
+  }
+  if (closed && !relayIsActive()) {
+    setRgb(false, false, true);
+    Serial.println("Relay pulse finished; lock output off.");
+  }
 }
 
 static void denyDoor(uint8_t resultCode, const uint8_t *userId, const char *detail) {
   setRgb(true, false, false);
   beep(220);
   appendEvent(EVENT_DENIED, userId, detail);
-  if (resultCode == 0x16) showMessage("Access denied", "Clock not synchronized");
+  if (resultCode == 0x16) showMessage("Access denied", "Clock not synced");
   else if (resultCode == 0x12) showMessage("Access denied", "Outside schedule");
   else showMessage("Access denied", "Not authorized");
 }
@@ -783,6 +1021,8 @@ static bool applySyncDocument(JsonDocument &document) {
 
   std::vector<UserRecord> updated;
   updated.reserve(array.size());
+  std::vector<UserNameRecord> updatedNames;
+  updatedNames.reserve(array.size());
   for (JsonObject item : array) {
     UserRecord user = {};
     if (!parseUuid(item["userId"] | "", user.userId)) return false;
@@ -806,10 +1046,21 @@ static bool applySyncDocument(JsonDocument &document) {
     if (user.daysMask == 0 || user.startMinute >= user.endMinute ||
         user.endMinute > 1440) return false;
     updated.push_back(user);
+    UserNameRecord nameRecord = {};
+    memcpy(nameRecord.userId, user.userId, 16);
+    if (item["name"].is<const char *>()) {
+      SmartAccessHardware::displayText(nameRecord.name, sizeof(nameRecord.name), item["name"].as<const char *>());
+    } else {
+      // Keep cached names if connecting to an older API without name metadata.
+      const UserNameRecord *oldName = findUserName(user.userId);
+      if (oldName) strlcpy(nameRecord.name, oldName->name, sizeof(nameRecord.name));
+    }
+    updatedNames.push_back(nameRecord);
   }
 
   const bool saved = saveUsers(updated);
   if (saved) {
+    if (!saveUserNames(updatedNames)) Serial.println("Could not persist user display names; credentials remain available.");
     Serial.printf("WebSocket sync applied: time=%d users=%u\n",
                   unixSeconds >= 1700000000U,
                   static_cast<unsigned>(updated.size()));
@@ -1071,6 +1322,12 @@ void setup() {
   pinMode(SMART_LOCK_PIN_LED_GREEN, OUTPUT);
   pinMode(SMART_LOCK_PIN_LED_BLUE, OUTPUT);
   setRgb(false, false, true);
+  pinMode(SMART_LOCK_PIN_EXIT_BUTTON, INPUT_PULLUP);
+  exitButton.begin(digitalRead(SMART_LOCK_PIN_EXIT_BUTTON) == LOW, millis());
+  hardwareTaskRunning = xTaskCreatePinnedToCore(hardwareTask, "lock-io", 3072,
+      nullptr, 2, nullptr, 1) == pdPASS;
+  if (!hardwareTaskRunning) Serial.println("Hardware task allocation failed; using local polling with networking disabled.");
+  setupLcd();
 
   preferences.begin("smart-lock", false);
   loadStoredData();
@@ -1102,6 +1359,9 @@ void setup() {
 }
 
 void loop() {
+  if (!hardwareTaskRunning) serviceHardware();
+  serviceHardwareFeedback();
+  updateLcd();
   uint8_t localMessage[kMaxBleMessage];
   size_t localLength = 0;
   portENTER_CRITICAL(&bleMux);
@@ -1116,12 +1376,6 @@ void loop() {
     else if (localMessage[0] == 0x03) processEncryptedMessage(localMessage, localLength);
   }
 
-  if (unlockUntil != 0 && static_cast<int32_t>(millis() - unlockUntil) >= 0) {
-    digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOffLevel);
-    unlockUntil = 0;
-    setRgb(false, false, true);
-    showMessage("Smart lock", clockValid ? "Ready" : "Waiting for time sync");
-  }
   if (pairingActive && static_cast<int32_t>(millis() - pairingExpiresAt) >= 0) {
     pairingActive = false;
     pairingPin[0] = '\0';
@@ -1133,7 +1387,7 @@ void loop() {
   }
   // A TLS reconnect can block for seconds. Finish BLE exchanges and the relay
   // pulse first so network recovery cannot lengthen an unlock interval.
-  if (unlockUntil != 0 || (sessionActive && !sessionConsumed &&
+  if (!hardwareTaskRunning || relayIsActive() || (sessionActive && !sessionConsumed &&
       static_cast<uint32_t>(millis() - sessionCreatedAt) < kSessionWindowMs)) {
     delay(8);
     return;
@@ -1186,3 +1440,6 @@ void loop() {
   }
   delay(8);
 }
+
+
+#endif // SMART_ACCESS_HOST_TEST
