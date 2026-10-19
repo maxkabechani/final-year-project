@@ -57,6 +57,25 @@ int main() {
   }
   assert(releases == 1);
 
+  DisplayNotice notice;
+  notice.show(100, 5000, true); // Exit feedback must clear at physical pulse end.
+  assert(notice.visible(5099));
+  notice.relayClosed();
+  assert(!notice.visible(5099));
+  notice.show(6000, 10000); // A BLE name can remain after relay closure.
+  notice.relayClosed();
+  assert(notice.visible(15999));
+  assert(!notice.visible(16000));
+  notice.show(UINT32_MAX - 100, 200);
+  assert(notice.visible(98));
+  assert(!notice.visible(99));
+  notice.show(20000, 10000); // Pairing notice returns to idle before window closes.
+  assert(!notice.visible(30000));
+  notice.show(31000, 5000, true); // Repeated exits do not leave a stale message.
+  assert(notice.visible(31000));
+  notice.relayClosed();
+  assert(!notice.visible(31001));
+
   char text[65], frame[17];
   displayText(text, sizeof(text), "Max Kashela Kabechani");
   displayPage(text, 0, frame);
@@ -70,5 +89,5 @@ int main() {
   char bounded[5];
   displayText(bounded, sizeof(bounded), "Long username");
   assert(strcmp(bounded, "Long") == 0);
-  puts("Exit debounce, held-button, independent relay timing, rollover, and LCD formatting passed.");
+  puts("Exit debounce, held-button, independent relay timing, rollover, LCD notice expiry, and formatting passed.");
 }

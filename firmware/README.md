@@ -11,11 +11,12 @@ Use this same sketch from Arduino IDE, ArduinoDroid, or the GitHub Actions firmw
 Install:
 
 - ESP32 board support by Espressif (CI uses 2.0.17)
+- NimBLE-Arduino by h2zero 2.5.1 (required; replaces the built-in Bluedroid BLE library)
 - ArduinoJson 7.4.2
 - WebSockets by Markus Sattler 2.7.2 (the version pinned in CI)
 - hd44780 by Bill Perry 1.3.2 (uses the hd44780_I2Cexp driver; Wire is bundled with ESP32 support)
 
-Select **ESP32 Dev Module** and **Huge APP (3MB No OTA / 1MB SPIFFS)**, then compile and upload.
+Select **ESP32 Dev Module** and **Huge APP (3MB No OTA / 1MB SPIFFS)**, then compile and upload. Keep **Erase All Flash Before Sketch Upload** disabled to preserve cached users and clock data. Reapply your existing Wi-Fi settings and controller token to the editable settings before uploading a fresh copy of the sketch.
 
 The editable controller settings are at the top of the sketch:
 
@@ -44,6 +45,10 @@ Audit events use the same WebSocket, avoiding a second simultaneous TLS client o
 Deploy API version 0.4.2 or later for LCD user names. `/health` reports `controllerDisplayNames: true`. Names are pushed with controller sync and when an administrator renames a person, then cached separately in NVS so existing credentials survive this firmware upgrade. Older APIs still support unlocking, with `Authorized user` shown until name metadata becomes available. The HTTP event endpoint is retained for older firmware.
 
 Connection failures retry with increasing delays capped at 60 seconds. A Wi-Fi disconnect explicitly releases the old socket; reconnecting performs authentication and a full sync again. Authentication has a 15-second deadline, and missing application heartbeat acknowledgements trigger recovery after 90 seconds. Network recovery waits until an active BLE exchange or unlock pulse finishes.
+
+NimBLE replaces the heavier Bluedroid BLE host to leave room for TLS certificate parsing while the LCD and exit task are enabled. The application service/characteristic UUIDs, notification descriptor, ECDH/AES-GCM protocol, and NVS credential layout are unchanged; existing Android and iOS apps do not need rebuilding or re-enrollment when NVS is preserved. ECDH temporary allocations are released as soon as the session key is derived, rather than retained until the next phone session.
+
+If startup reports `0 authorized users` and `Waiting for time sync`, phone unlocking cannot succeed until a full backend sync repopulates the controller (or an offline phone enrollment supplies its credential). Wait for `WebSocket sync applied: time=1 users=...` before testing existing phone unlocks. An `X509 - Allocation of memory failed` error means the TLS handshake ran out of memory; it is not an access-schedule rejection. The exit button continues to work without synchronization.
 
 For troubleshooting, capture the `Backend connect attempt` and `Backend TCP/TLS connect failed` lines. They include the actual TLS error, elapsed time, free heap and largest allocatable block. The previous `TCP connection cleanup` text alone did not distinguish a TCP failure from a TLS failure. In Arduino IDE, select **Core Debug Level: Error** for additional ESP32 TLS diagnostics; CI enables this automatically. Never include the controller token in shared logs.
 
@@ -81,13 +86,13 @@ The LCD driver automatically discovers the backpack I2C address and pin mapping.
 | --- | --- | --- |
 | Ready | Smart Access | Online/Offline and Zambia time |
 | Clock not synchronized | Smart Access | Waiting for sync |
-| Pairing open | Pairing enabled | PIN: configured PIN |
+| Pairing opened (first 10 seconds) | Pairing enabled | PIN: configured PIN |
 | Valid BLE unlock | Access granted | Registered person's name |
 | Exit release | Exit button | Door unlocked |
 | Invalid credential | Access denied | Not authorized |
 | Outside schedule | Access denied | Outside schedule |
 
-Unlock results remain visible for 10 seconds. Names longer than 16 characters page across the second row every 1.4 seconds. Display labels are capped at 30 printable ASCII characters to fit the LCD and the existing 48-user WebSocket payload budget. Accented Latin letters are normalized by the backend; unsupported characters appear as `?`. The full original name remains in the dashboard. Names are display metadata only: BLE authentication continues to use the user UUID and cryptographic credential.
+The exit message clears when the five-second relay pulse finishes, returning to `Smart Access` and the clock/status row. The pairing PIN is a ten-second notice when pairing opens; pairing remains available for the full 120 seconds, without replacing the default screen after an exit. Expiring pairing does not overwrite an in-progress access result. BLE unlock results remain visible for 10 seconds. Names longer than 16 characters page across the second row every 1.4 seconds. Display labels are capped at 30 printable ASCII characters to fit the LCD and the existing 48-user WebSocket payload budget. Accented Latin letters are normalized by the backend; unsupported characters appear as `?`. The full original name remains in the dashboard. Names are display metadata only: BLE authentication continues to use the user UUID and cryptographic credential.
 
 The exit input is debounced for 40 ms. Each press generates at most one five-second release; holding the button does not keep the relay energized, and pressing during an existing pulse does not extend it. A button held during startup must be released before it can trigger. Exit release works without a phone, clock sync, or network connection, and is logged as a granted event with no person attached and detail `exit button release`.
 

@@ -39,6 +39,23 @@ class RelayPulse {
   bool active_ = false;
 };
 
+// Temporary messages expire independently of the startup pairing window.
+// Exit feedback is tied to the physical pulse rather than an unrelated timer.
+class DisplayNotice {
+ public:
+  void show(uint32_t now, uint32_t duration, bool untilRelayCloses = false) {
+    startedAt_ = now; duration_ = duration; untilRelayCloses_ = untilRelayCloses;
+  }
+  bool visible(uint32_t now) const {
+    return static_cast<uint32_t>(now - startedAt_) < duration_;
+  }
+  uint32_t page(uint32_t now) const { return (now - startedAt_) / 1400U; }
+  void relayClosed() { if (untilRelayCloses_) duration_ = 0; }
+ private:
+  uint32_t startedAt_ = 0, duration_ = 0;
+  bool untilRelayCloses_ = false;
+};
+
 static void displayText(char *out, size_t size, const char *text) {
   if (size == 0) return;
   size_t length = 0;
@@ -64,10 +81,7 @@ static void displayPage(const char *text, uint32_t page, char out[17]) {
 #ifndef SMART_ACCESS_HOST_TEST
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include "BLEDevice.h"
-#include "BLEServer.h"
-#include "BLEUtils.h"
-#include "BLE2902.h"
+#include <NimBLEDevice.h>
 #include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -157,7 +171,7 @@ enum EventType : uint8_t {
 };
 
 Preferences preferences;
-BLECharacteristic *messageCharacteristic = nullptr;
+NimBLECharacteristic *messageCharacteristic = nullptr;
 std::vector<UserRecord> users;
 std::vector<UserNameRecord> userNames;
 std::vector<EventRecord> events;
@@ -167,8 +181,7 @@ bool lcdReady = false;
 char displayLine1[65] = "Smart Access";
 char displayLine2[65] = "Starting...";
 char previousLcdLines[2][17] = {};
-uint32_t displayStartedAt = 0;
-uint32_t displayDurationMs = 2500;
+SmartAccessHardware::DisplayNotice displayNotice;
 
 portMUX_TYPE hardwareMux = portMUX_INITIALIZER_UNLOCKED;
 SmartAccessHardware::ExitButton exitButton;
@@ -182,9 +195,6 @@ uint8_t pendingBleBytes[kMaxBleMessage];
 size_t pendingBleLength = 0;
 bool pendingBleWrite = false;
 
-mbedtls_ecp_group sessionGroup;
-mbedtls_mpi sessionPrivate;
-mbedtls_ecp_point sessionPublic;
 uint8_t sessionKey[16];
 uint8_t sessionNonce[16];
 uint8_t phonePublicKey[64];
@@ -192,7 +202,6 @@ uint8_t controllerPublicKey[64];
 uint32_t sessionCreatedAt = 0;
 bool sessionActive = false;
 bool sessionConsumed = false;
-bool sessionCryptoInitialized = false;
 
 bool clockValid = false;
 uint32_t clockEpoch = 0;
@@ -542,12 +551,12 @@ static void setRgb(bool red, bool green, bool blue) {
   digitalWrite(SMART_LOCK_PIN_LED_BLUE, blue ? HIGH : LOW);
 }
 
-static void showMessageFor(const char *line1, const char *line2, uint32_t durationMs) {
+static void showMessageFor(const char *line1, const char *line2, uint32_t durationMs,
+                           bool untilRelayCloses = false) {
   Serial.printf("%s | %s\n", line1, line2);
   SmartAccessHardware::displayText(displayLine1, sizeof(displayLine1), line1);
   SmartAccessHardware::displayText(displayLine2, sizeof(displayLine2), line2);
-  displayStartedAt = millis();
-  displayDurationMs = durationMs;
+  displayNotice.show(millis(), durationMs, untilRelayCloses);
 }
 
 static void showMessage(const char *line1, const char *line2) {
@@ -568,15 +577,12 @@ static void setupLcd() {
 static void updateLcd() {
   if (!lcdReady) return;
   char line1[65], line2[65];
-  const uint32_t elapsed = millis() - displayStartedAt;
+  const uint32_t now = millis();
   uint32_t page = 0;
-  if (elapsed < displayDurationMs) {
+  if (displayNotice.visible(now)) {
     strlcpy(line1, displayLine1, sizeof(line1));
     strlcpy(line2, displayLine2, sizeof(line2));
-    page = elapsed / 1400U;
-  } else if (pairingActive) {
-    strlcpy(line1, "Pairing enabled", sizeof(line1));
-    snprintf(line2, sizeof(line2), "PIN: %s", pairingPin);
+    page = displayNotice.page(now);
   } else {
     strlcpy(line1, "Smart Access", sizeof(line1));
     const time_t localSeconds = static_cast<time_t>(nowUnix()) + 7200;
@@ -632,9 +638,10 @@ static void serviceHardwareFeedback() {
     setRgb(false, true, false);
     beep();
     appendEvent(EVENT_GRANTED, nullptr, "exit button release");
-    showMessageFor("Exit button", relayIsActive() ? "Door unlocked" : "Release complete", 7000);
+    if (relayIsActive()) showMessageFor("Exit button", "Door unlocked", 5000, true);
   }
   if (closed && !relayIsActive()) {
+    displayNotice.relayClosed();
     setRgb(false, false, true);
     Serial.println("Relay pulse finished; lock output off.");
   }
@@ -665,23 +672,17 @@ static bool scheduleAllows(const UserRecord &user, uint32_t utcSeconds) {
 static void notifyBytes(const std::vector<uint8_t> &value) {
   if (messageCharacteristic == nullptr || value.empty()) return;
 
-  // ESP32 Arduino core 2.0.17 exposes BLECharacteristic::setValue(uint8_t*, size_t)
-  // rather than a const-byte overload. Copy into a mutable buffer for compatibility.
-  std::vector<uint8_t> bytes(value.begin(), value.end());
-  messageCharacteristic->setValue(bytes.data(), bytes.size());
+  messageCharacteristic->setValue(value.data(), value.size());
   messageCharacteristic->notify();
 }
 
 static bool createSession(const uint8_t phoneBytes[64]) {
-  if (sessionCryptoInitialized) {
-    mbedtls_ecp_group_free(&sessionGroup);
-    mbedtls_mpi_free(&sessionPrivate);
-    mbedtls_ecp_point_free(&sessionPublic);
-  }
+  mbedtls_ecp_group sessionGroup;
+  mbedtls_mpi sessionPrivate;
+  mbedtls_ecp_point sessionPublic;
   mbedtls_ecp_group_init(&sessionGroup);
   mbedtls_mpi_init(&sessionPrivate);
   mbedtls_ecp_point_init(&sessionPublic);
-  sessionCryptoInitialized = true;
   sessionActive = false;
   memset(sessionKey, 0, sizeof(sessionKey));
 
@@ -721,6 +722,11 @@ static bool createSession(const uint8_t phoneBytes[64]) {
   }
   memset(sharedSecret, 0, sizeof(sharedSecret));
   mbedtls_ecp_point_free(&phonePoint);
+  // Only the derived AES key and serialized public keys are needed afterwards.
+  // Free the ECDH/precomputation buffers before another TLS connection attempt.
+  mbedtls_ecp_group_free(&sessionGroup);
+  mbedtls_mpi_free(&sessionPrivate);
+  mbedtls_ecp_point_free(&sessionPublic);
   if (!ok) {
     sessionActive = false;
     return false;
@@ -934,25 +940,16 @@ static void processEncryptedMessage(const uint8_t *value, size_t length) {
   sessionActive = false;
 }
 
-class SmartAccessServerCallbacks : public BLEServerCallbacks {
+class SmartAccessServerCallbacks : public NimBLEServerCallbacks {
  public:
-  void onConnect(BLEServer *server) override {
-    (void)server;
-  }
-
-  void onDisconnect(BLEServer *server) override {
-    // Match SunFounder's ESP32 BLE pattern and immediately advertise again.
-    server->getAdvertising()->start();
+  void onDisconnect(NimBLEServer *, NimBLEConnInfo &, int) override {
+    NimBLEDevice::startAdvertising();
   }
 };
 
-class ControlCallbacks : public BLECharacteristicCallbacks {
+class ControlCallbacks : public NimBLECharacteristicCallbacks {
  public:
-  void onWrite(BLECharacteristic *characteristic) override {
-    // BLECharacteristic::getValue() differs between ESP32 Arduino builds:
-    // some return std::string, while ArduinoDroid's bundled BLE library can
-    // return Arduino String. Both support length() and c_str(), so avoid
-    // depending on either concrete type here.
+  void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &) override {
     const auto value = characteristic->getValue();
     const size_t valueLength = value.length();
     if (valueLength == 0 || valueLength > kMaxBleMessage) return;
@@ -968,45 +965,40 @@ static void setupBle() {
   String advertisedName = "LOCK-" + String(SMART_LOCK_DEVICE_ID);
   if (advertisedName.length() > 24) advertisedName.remove(24);
 
-  // Use the same built-in ESP32 BLE stack/pattern as SunFounder's working
-  // Starter Kit example. ArduinoDroid proved this stack works on the board.
-  BLEDevice::init(advertisedName.c_str());
-
-  BLEServer *server = BLEDevice::createServer();
+  // NimBLE leaves substantially more heap for Wi-Fi/TLS than Bluedroid.
+  // Service UUIDs, write/notify properties and encrypted payloads are unchanged.
+  if (!NimBLEDevice::init(advertisedName.c_str())) {
+    Serial.println("BLE initialization failed");
+    return;
+  }
+  // The encrypted hello/challenge must fit in a single GATT message.
+  NimBLEDevice::setMTU(185);
+  NimBLEServer *server = NimBLEDevice::createServer();
   if (server == nullptr) {
     Serial.println("BLE server creation failed");
     return;
   }
   server->setCallbacks(new SmartAccessServerCallbacks());
-
-  BLEService *service = server->createService(kServiceUuid);
+  NimBLEService *service = server->createService(kServiceUuid);
   if (service == nullptr) {
     Serial.println("BLE service creation failed");
     return;
   }
-
-  BLECharacteristic *control = service->createCharacteristic(
-      kControlUuid,
-      BLECharacteristic::PROPERTY_WRITE);
-
+  NimBLECharacteristic *control = service->createCharacteristic(
+      kControlUuid, NIMBLE_PROPERTY::WRITE, kMaxBleMessage);
   messageCharacteristic = service->createCharacteristic(
-      kMessageUuid,
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-
-  // Android notification subscriptions expect the standard CCCD descriptor.
-  messageCharacteristic->addDescriptor(new BLE2902());
+      kMessageUuid, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY, kMaxBleMessage);
+  // NimBLE automatically creates the standard 0x2902 notification descriptor.
   control->setCallbacks(new ControlCallbacks());
-
   service->start();
 
-  // Explicitly advertise the Smart Access service and put the device name in
-  // the scan response. This makes discovery reliable for Flutter/Android
-  // scanners while keeping the same built-in ESP32 BLE stack.
-  BLEAdvertising *advertising = server->getAdvertising();
+  NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
   advertising->addServiceUUID(kServiceUuid);
-  advertising->setScanResponse(true);
+  advertising->enableScanResponse(true);
+  advertising->setName(advertisedName.c_str());
   advertising->start();
-  Serial.printf("BLE advertising as %s\n", advertisedName.c_str());
+  Serial.printf("BLE advertising as %s (NimBLE); freeHeap=%u largestBlock=%u\n",
+                advertisedName.c_str(), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 static bool applySyncDocument(JsonDocument &document) {
@@ -1307,6 +1299,9 @@ static bool startPairingWindow() {
   pairingFailures = 0;
   pairingExpiresAt = millis() + kPairWindowMs;
   Serial.printf("Pairing enabled for 120 seconds. PIN: %s\n", pairingPin);
+  char pinLabel[17];
+  snprintf(pinLabel, sizeof(pinLabel), "PIN: %s", pairingPin);
+  showMessageFor("Pairing enabled", pinLabel, 10000);
   setRgb(false, false, true);
   beep(120);
   return true;
@@ -1352,8 +1347,8 @@ void setup() {
   }
 
   setupBle();
-  startPairingWindow();
   showMessage("Smart lock ready", clockValid ? "Offline access ready" : "Waiting for time sync");
+  startPairingWindow();
   Serial.printf("Controller %s ready with %u authorized users.\n",
                 SMART_LOCK_DEVICE_ID, static_cast<unsigned>(users.size()));
 }
@@ -1379,7 +1374,7 @@ void loop() {
   if (pairingActive && static_cast<int32_t>(millis() - pairingExpiresAt) >= 0) {
     pairingActive = false;
     pairingPin[0] = '\0';
-    showMessage("Pairing ended", "BLE access ready");
+    Serial.println("Pairing ended | BLE access ready");
   }
   if (lockoutActive && static_cast<int32_t>(millis() - lockoutExpiresAt) >= 0) {
     lockoutActive = false;
