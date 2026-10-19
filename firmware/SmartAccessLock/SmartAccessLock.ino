@@ -881,6 +881,11 @@ static void handleBackendWebSocketEvent(WStype_t type, uint8_t *payload, size_t 
       }
       Serial.println();
       backendSocketAuthenticated = false;
+      // Rebuild the next batch from NVS-backed events after reconnecting.
+      // Release its JSON buffer before the next memory-hungry TLS handshake.
+      pendingEventMessage = String();
+      pendingEventIds.clear();
+      pendingEventRequestId[0] = '\0';
       backendReconnectDelayMs = std::min<uint32_t>(backendReconnectDelayMs * 2U, 60000U);
       backendSocket.setReconnectInterval(backendReconnectDelayMs);
       Serial.printf("Backend retry in %lu ms; freeHeap=%u largestBlock=%u\n",
@@ -933,7 +938,7 @@ static void handleBackendWebSocketEvent(WStype_t type, uint8_t *payload, size_t 
           return false;
         }), events.end());
         saveEvents();
-        pendingEventMessage = "";
+        pendingEventMessage = String();
         pendingEventIds.clear();
         pendingEventRequestId[0] = '\0';
         Serial.printf("Queued access events acknowledged: %u; remaining=%u\n",

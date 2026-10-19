@@ -264,7 +264,7 @@ jobs:
           mkdir -p firmware/build
           arduino-cli compile \
             --fqbn esp32:esp32:esp32:PartitionScheme=huge_app \
-            --build-property build.extra_flags=-DCORE_DEBUG_LEVEL=1 \
+            --build-property build.code_debug=1 \
             --output-dir firmware/build \
             firmware/SmartAccessLock
       - name: Upload compiled ESP32 firmware
