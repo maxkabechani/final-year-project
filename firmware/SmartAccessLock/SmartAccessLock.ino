@@ -56,6 +56,22 @@ class DisplayNotice {
   bool untilRelayCloses_ = false;
 };
 
+// LCD nibble synchronization can be lost even when the I2C backpack ACKs.
+// Settle after switching before reinitializing, and back off on missing hardware.
+class LcdRecovery {
+ public:
+  void switched(uint32_t at) { pending_ = true; dueAt_ = at + 200U; }
+  void failed(uint32_t now) { pending_ = true; dueAt_ = now + 5000U; }
+  bool pending() const { return pending_; }
+  bool due(uint32_t now) const {
+    return pending_ && static_cast<int32_t>(now - dueAt_) >= 0;
+  }
+  void recovered() { pending_ = false; }
+ private:
+  uint32_t dueAt_ = 0;
+  bool pending_ = false;
+};
+
 static void displayText(char *out, size_t size, const char *text) {
   if (size == 0) return;
   size_t length = 0;
@@ -178,6 +194,8 @@ std::vector<EventRecord> events;
 
 hd44780_I2Cexp lcd; // Auto-detect the backpack address and pin mapping.
 bool lcdReady = false;
+SmartAccessHardware::LcdRecovery lcdRecovery;
+uint32_t lcdSeenRelayGeneration = 0;
 char displayLine1[65] = "Smart Access";
 char displayLine2[65] = "Starting...";
 char previousLcdLines[2][17] = {};
@@ -189,6 +207,9 @@ SmartAccessHardware::RelayPulse relayPulse;
 bool pendingExitRelease = false;
 bool pendingRelayClosed = false;
 bool hardwareTaskRunning = false;
+// Written with hardwareMux held; the hardware task never calls Wire/the LCD.
+uint32_t relaySwitchGeneration = 0;
+uint32_t relaySwitchedAt = 0;
 
 portMUX_TYPE bleMux = portMUX_INITIALIZER_UNLOCKED;
 uint8_t pendingBleBytes[kMaxBleMessage];
@@ -513,6 +534,8 @@ static void startRelayPulse() {
   relayPulse.start(millis());
   pendingRelayClosed = false;
   digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOnLevel);
+  relaySwitchedAt = millis();
+  ++relaySwitchGeneration;
   portEXIT_CRITICAL(&hardwareMux);
 }
 
@@ -523,6 +546,8 @@ static void serviceHardware() {
   portENTER_CRITICAL(&hardwareMux);
   if (relayPulse.update(now)) {
     digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOffLevel);
+    relaySwitchedAt = now;
+    ++relaySwitchGeneration;
     pendingRelayClosed = true;
   }
   portEXIT_CRITICAL(&hardwareMux);
@@ -532,6 +557,8 @@ static void serviceHardware() {
       relayPulse.start(now);
       pendingRelayClosed = false;
       digitalWrite(SMART_LOCK_PIN_RELAY, kRelayOnLevel);
+      relaySwitchedAt = now;
+      ++relaySwitchGeneration;
       pendingExitRelease = true;
     }
     portEXIT_CRITICAL(&hardwareMux);
@@ -563,18 +590,45 @@ static void showMessage(const char *line1, const char *line2) {
   showMessageFor(line1, line2, 3000);
 }
 
-static void setupLcd() {
-  if (!SMART_LOCK_LCD_ENABLED) return;
-  Wire.begin(SMART_LOCK_PIN_LCD_SDA, SMART_LOCK_PIN_LCD_SCL);
+static bool initializeLcd(const char *reason) {
+  // Restart the ESP32 bus as well after a reported transport failure.
+  if (!lcdReady) Wire.end();
+  const bool busReady = Wire.begin(SMART_LOCK_PIN_LCD_SDA, SMART_LOCK_PIN_LCD_SCL, 100000);
   Wire.setTimeOut(20);
-  const int status = lcd.begin(16, 2);
+  // begin() performs the full HD44780 instruction sequence, restoring 4-bit
+  // synchronization. clear() or rewriting text alone cannot repair lost nibbles.
+  const int status = busReady ? lcd.begin(16, 2) : -1;
   lcdReady = status == 0;
-  Serial.printf("LCD initialization: %s (status=%d, SDA=%d, SCL=%d)\n",
-                lcdReady ? "ready" : "not found; access remains available",
+  Serial.printf("LCD %s: %s (status=%d, SDA=%d, SCL=%d)\n",
+                reason, lcdReady ? "ready" : "failed; retry scheduled",
                 status, SMART_LOCK_PIN_LCD_SDA, SMART_LOCK_PIN_LCD_SCL);
+  if (lcdReady) {
+    memset(previousLcdLines, 0, sizeof(previousLcdLines));
+    lcdRecovery.recovered();
+  } else {
+    lcdRecovery.failed(millis());
+  }
+  return lcdReady;
+}
+
+static void setupLcd() {
+  if (SMART_LOCK_LCD_ENABLED) initializeLcd("initialization");
 }
 
 static void updateLcd() {
+  if (!SMART_LOCK_LCD_ENABLED) return;
+  portENTER_CRITICAL(&hardwareMux);
+  const uint32_t generation = relaySwitchGeneration;
+  const uint32_t switchedAt = relaySwitchedAt;
+  portEXIT_CRITICAL(&hardwareMux);
+  if (generation != lcdSeenRelayGeneration) {
+    lcdSeenRelayGeneration = generation;
+    lcdRecovery.switched(switchedAt);
+  }
+  if (lcdRecovery.pending()) {
+    if (!lcdRecovery.due(millis())) return;
+    if (!initializeLcd("recovery")) return;
+  }
   if (!lcdReady) return;
   char line1[65], line2[65];
   const uint32_t now = millis();
@@ -602,7 +656,8 @@ static void updateLcd() {
     if (memcmp(frames[row], previousLcdLines[row], 17) == 0) continue;
     if (lcd.setCursor(0, row) != 0 || lcd.print(frames[row]) != 16) {
       lcdReady = false;
-      Serial.println("LCD I2C write failed; display disabled until restart. Access remains available.");
+      lcdRecovery.failed(millis());
+      Serial.println("LCD I2C write failed; retry in 5 seconds. Access remains available.");
       return;
     }
     memcpy(previousLcdLines[row], frames[row], 17);
@@ -1382,7 +1437,9 @@ void loop() {
   }
   // A TLS reconnect can block for seconds. Finish BLE exchanges and the relay
   // pulse first so network recovery cannot lengthen an unlock interval.
-  if (!hardwareTaskRunning || relayIsActive() || (sessionActive && !sessionConsumed &&
+  if (!hardwareTaskRunning || relayIsActive() ||
+      (SMART_LOCK_LCD_ENABLED && lcdReady && lcdRecovery.pending()) ||
+      (sessionActive && !sessionConsumed &&
       static_cast<uint32_t>(millis() - sessionCreatedAt) < kSessionWindowMs)) {
     delay(8);
     return;

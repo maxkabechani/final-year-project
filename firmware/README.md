@@ -80,7 +80,7 @@ instead of claiming that pairing is enabled. Offline requests are rejected, not 
 
 ## LCD and exit-button behavior
 
-The LCD driver automatically discovers the backpack I2C address and pin mapping. Set `SMART_LOCK_LCD_ENABLED` to `0` to disable it. If detection or a later I2C write fails, the display is disabled until restart; BLE and the exit button continue working. The LCD/buzzer +5V rail needs its own valid 5V supply path: powering the ESP32 over USB may not feed it backwards through D2. Adjust the LCD backpack contrast potentiometer if the backlight is on but text is invisible.
+The LCD driver automatically discovers the backpack I2C address and pin mapping. Set `SMART_LOCK_LCD_ENABLED` to `0` to disable it. If detection or a later I2C write fails, the display retries initialization every five seconds; BLE and the exit button continue working. The LCD/buzzer +5V rail needs its own valid 5V supply path: powering the ESP32 over USB may not feed it backwards through D2. Adjust the LCD backpack contrast potentiometer if the backlight is on but text is invisible.
 
 | State | LCD first row | LCD second row |
 | --- | --- | --- |
@@ -97,6 +97,12 @@ The exit message clears when the five-second relay pulse finishes, returning to 
 The exit input is debounced for 40 ms. Each press generates at most one five-second release; holding the button does not keep the relay energized, and pressing during an existing pulse does not extend it. A button held during startup must be released before it can trigger. Exit release works without a phone, clock sync, or network connection, and is logged as a granted event with no person attached and detail `exit button release`.
 
 A dedicated hardware task polls the button and switches the relay off at its deadline even while the main task is busy with TLS, BLE, flash storage, or LCD communication. If that task cannot be allocated, local polling remains available and networking is disabled to avoid blocking local release handling.
+
+### Garbled LCD after unlock
+
+Relay/strike switching can disturb the LCD supply or signal levels and leave the HD44780 out of 4-bit synchronization even when its I2C backpack still acknowledges writes. Firmware waits 200 ms after either relay edge, runs the full LCD initialization sequence, invalidates both cached rows, and redraws the current screen. It uses a 100 kHz I2C bus and a 20 ms bus timeout. Reinitialization runs only in the main task; the separate relay/button task continues enforcing the five-second release. New backend connection attempts wait through that short display settling interval. Failed display initialization/writes retry after five seconds rather than requiring a controller reboot.
+
+This recovers display state; it does not fix an unstable power rail or electrical interference. To isolate the cause, power off, disconnect the strike from X4, then power up the controller/LCD and repeat several unlocks. If corruption stops with the strike disconnected, inspect the strike supply, return wiring and D1 flyback protection. If it persists, the relay/buzzer, LCD supply, I2C wiring or level shifter remain candidates. Check serial for `LCD recovery: ready` or the reported status when sharing results.
 
 Host regression tests can be run without an ESP32:
 

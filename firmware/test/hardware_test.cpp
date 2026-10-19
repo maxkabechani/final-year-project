@@ -76,6 +76,32 @@ int main() {
   notice.relayClosed();
   assert(!notice.visible(31001));
 
+  LcdRecovery recovery;
+  assert(!recovery.pending());
+  recovery.switched(100); // No I2C writes during the settling interval.
+  assert(recovery.pending());
+  assert(!recovery.due(299));
+  assert(recovery.due(300));
+  recovery.recovered();
+  assert(!recovery.pending());
+  assert(!recovery.due(301));
+  recovery.switched(5100); // Both relay edges require resynchronization.
+  assert(!recovery.due(5299));
+  assert(recovery.due(5300));
+  recovery.failed(5300); // Missing LCD must retry without a tight loop.
+  assert(!recovery.due(10299));
+  assert(recovery.due(10300));
+  recovery.switched(10200); // A new switch restarts the settle interval.
+  assert(!recovery.due(10300));
+  assert(recovery.due(10400));
+  recovery.recovered();
+  recovery.switched(UINT32_MAX - 100);
+  assert(!recovery.due(98));
+  assert(recovery.due(99));
+  recovery.failed(UINT32_MAX - 1000);
+  assert(!recovery.due(3998));
+  assert(recovery.due(3999));
+
   char text[65], frame[17];
   displayText(text, sizeof(text), "Max Kashela Kabechani");
   displayPage(text, 0, frame);
@@ -89,5 +115,5 @@ int main() {
   char bounded[5];
   displayText(bounded, sizeof(bounded), "Long username");
   assert(strcmp(bounded, "Long") == 0);
-  puts("Exit debounce, held-button, independent relay timing, rollover, LCD notice expiry, and formatting passed.");
+  puts("Exit debounce, held-button, independent relay timing, rollover, LCD notice expiry/recovery, and formatting passed.");
 }
